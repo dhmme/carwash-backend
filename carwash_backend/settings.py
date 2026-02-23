@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     'corsheaders',
      # Local apps
     'api',
+    'corsheaders',
 ]
 
 MIDDLEWARE = [
@@ -128,4 +129,12 @@ STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CORS_ALLOW_ALL_ORIGINS = True
+
+CORS_ALLOWED_ORIGINS = [
+    "https://carwash-customer-app-295q-a8f2ipqao-abdulrhman-khalids-projects.vercel.app",
+]
+
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://.*\.vercel\.app$",
+]
 
