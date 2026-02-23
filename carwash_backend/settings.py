@@ -25,7 +25,10 @@ SECRET_KEY = "django-insecure-@78)s3bzfgncmxu^d#8%o0h84pm!isi7s3&g)34pgxe_5x0+0u
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    "carwash-backend-2yz2.onrender.com",
+    ".vercel.app",
+]
 
 
 # Application definition
