@@ -28,6 +28,9 @@ DEBUG = True
 ALLOWED_HOSTS = [
     "carwash-backend-2yz2.onrender.com",
     ".vercel.app",
+    ".onrender.com",
+    "localhost",
+    "127.0.0.1",
 ]
 
 
@@ -45,11 +48,11 @@ INSTALLED_APPS = [
     'corsheaders',
      # Local apps
     'api',
-    'corsheaders',
+    
 ]
 
 MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
