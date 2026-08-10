@@ -6,10 +6,17 @@ from .views import (
     booking_list_create,
     booked_slots, 
     worker_bookings,
+    register_view,
+    login_view,
+    logout_view,
+    update_booking_status,
 )
 
 urlpatterns = [
     path('hello/', hello_view, name='hello'),
+    path('auth/register/', register_view, name='register'),
+    path('auth/login/', login_view, name='login'),
+    path('auth/logout/', logout_view, name='logout'),
 
     # Services
     path('services/', service_list, name='service-list'),
@@ -25,5 +32,7 @@ urlpatterns = [
 
     # For Worker
     path('worker/bookings/', worker_bookings, name='worker-bookings'),
+    path('worker/bookings/<int:booking_id>/status/', update_booking_status,
+         name='worker-booking-status'),
 
 ]

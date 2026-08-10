@@ -1,108 +1,151 @@
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
-from rest_framework import status , viewsets
+from django.contrib.auth import authenticate
 from django.utils import timezone
+from rest_framework import status
+from rest_framework.authtoken.models import Token
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
+from rest_framework.response import Response
 
-
-from .models import Service, Car, Booking
-from .serializers import ServiceSerializer, CarSerializer , BookingSerializer , WorkerBookingSerializer
+from .models import Booking, Car, Service
+from .serializers import (
+    BookingSerializer,
+    BookingStatusSerializer,
+    CarSerializer,
+    RegisterSerializer,
+    ServiceSerializer,
+    UserSerializer,
+    WorkerBookingSerializer,
+)
 
 
 @api_view(['GET'])
+@permission_classes([AllowAny])
 def hello_view(request):
-    return Response({"message": "Car Wash API is working!"})
+    return Response({'message': 'Car Wash API is working!'})
 
 
-# ===== SERVICES =====
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def register_view(request):
+    serializer = RegisterSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    user = serializer.save()
+    token, _ = Token.objects.get_or_create(user=user)
+    return Response(
+        {'token': token.key, 'user': UserSerializer(user).data},
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def login_view(request):
+    username = request.data.get('username', '').strip()
+    password = request.data.get('password', '')
+    user = authenticate(request, username=username, password=password)
+    if user is None:
+        return Response(
+            {'detail': 'رقم الجوال أو كلمة المرور غير صحيحة.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    token, _ = Token.objects.get_or_create(user=user)
+    return Response({
+        'token': token.key,
+        'user': UserSerializer(user).data,
+        'is_staff': user.is_staff,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def logout_view(request):
+    Token.objects.filter(user=request.user).delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 @api_view(['GET'])
+@permission_classes([AllowAny])
 def service_list(request):
     services = Service.objects.filter(is_active=True)
-    serializer = ServiceSerializer(services, many=True)
-    return Response(serializer.data)
+    return Response(ServiceSerializer(services, many=True).data)
 
 
-# ===== CARS =====
 @api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
 def car_list_create(request):
-    """
-    GET: list cars (optionally filter by user_id ?user_id=1)
-    POST: create car
-    """
     if request.method == 'GET':
-        user_id = request.GET.get('user_id')
-        if user_id:
-            cars = Car.objects.filter(user_id=user_id)
-        else:
-            cars = Car.objects.all()  # later we will secure this
-        serializer = CarSerializer(cars, many=True)
-        return Response(serializer.data)
+        cars = Car.objects.filter(user=request.user)
+        return Response(CarSerializer(cars, many=True).data)
 
-    if request.method == 'POST':
-        serializer = CarSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    serializer = CarSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    serializer.save(user=request.user)
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
-# ===== BOOKINGS =====
 @api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
 def booking_list_create(request):
-    """
-    GET: list bookings (optionally filter by customer_id ?customer_id=1)
-    POST: create booking
-    """
     if request.method == 'GET':
-        customer_id = request.GET.get('customer_id')
-        if customer_id:
-            bookings = Booking.objects.filter(customer_id=customer_id)
-        else:
-            bookings = Booking.objects.all()  # later we will secure this
-        serializer = BookingSerializer(bookings, many=True)
+        bookings = Booking.objects.filter(
+            customer=request.user
+        ).select_related('service', 'customer').order_by('-id')
+        serializer = BookingSerializer(
+            bookings,
+            many=True,
+            context={'request': request},
+        )
         return Response(serializer.data)
 
-    if request.method == 'POST':
-        serializer = BookingSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-
-class BookingViewSet(viewsets.ModelViewSet):
-    queryset = Booking.objects.all().order_by('-id')
-    serializer_class = BookingSerializer    
+    serializer = BookingSerializer(
+        data=request.data,
+        context={'request': request},
+    )
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 @api_view(['GET'])
+@permission_classes([AllowAny])
 def booked_slots(request):
-    """
-    يرجّع الأوقات المحجوزة في يوم معيّن.
-    مثال: /api/booked-slots/?date=2025-12-02
-    """
-    date = request.GET.get('date')  # صيغة YYYY-MM-DD
-
+    date = request.GET.get('date')
     if not date:
-        return Response({'error': 'date query parameter is required'}, status=400)
-
-    slots_qs = Booking.objects.filter(date=date).values_list('time_slot', flat=True)
-    return Response({'booked': list(slots_qs)})
+        return Response(
+            {'error': 'date query parameter is required'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    slots = Booking.objects.filter(date=date).exclude(
+        status='canceled'
+    ).values_list('time_slot', flat=True)
+    return Response({'booked': list(slots)})
 
 
 @api_view(['GET'])
+@permission_classes([IsAdminUser])
 def worker_bookings(request):
-    """
-    واجهة العمالة: ترجع حجوزات اليوم (أو تاريخ معين)
-    /api/worker/bookings/        -> اليوم
-    /api/worker/bookings/?date=2025-12-02
-    """
-    date_str = request.GET.get('date')
-    if date_str:
-        date = date_str  # DateField يقبل string بصيغة YYYY-MM-DD
-    else:
-        date = timezone.localdate()
+    date = request.GET.get('date') or timezone.localdate()
+    bookings = Booking.objects.filter(date=date).select_related(
+        'service'
+    ).order_by('time_slot')
+    return Response(WorkerBookingSerializer(bookings, many=True).data)
 
-    qs = Booking.objects.filter(date=date).order_by('time_slot')
-    serializer = WorkerBookingSerializer(qs, many=True)
+
+@api_view(['PATCH'])
+@permission_classes([IsAdminUser])
+def update_booking_status(request, booking_id):
+    try:
+        booking = Booking.objects.get(pk=booking_id)
+    except Booking.DoesNotExist:
+        return Response(
+            {'detail': 'الطلب غير موجود.'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    serializer = BookingStatusSerializer(
+        booking,
+        data=request.data,
+        partial=True,
+    )
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
     return Response(serializer.data)

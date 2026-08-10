@@ -38,19 +38,28 @@ class Booking(models.Model):
     ]
 
     PAYMENT_METHOD_CHOICES = [
-        ('apple_pay', 'Apple Pay'),
-        ('google_pay', 'Google Pay / Android Pay'),
-        ('mada', 'Mada'),
-        ('cash', 'Cash'),
+        ('cash', 'كاش'),
+        ('card', 'شبكة'),
+        ('bank_transfer', 'تحويل بنكي'),
     ]
 
     class Meta:
-        # ما فيه حجزين بنفس اليوم ونفس الوقت
-        unique_together = ('date', 'time_slot')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['date', 'time_slot'],
+                condition=~models.Q(status='canceled'),
+                name='unique_active_booking_slot',
+            ),
+        ]
 
     # العلاقات القديمة (نخليها عادي)
     customer = models.ForeignKey(User, on_delete=models.CASCADE)
-    car = models.ForeignKey(Car, on_delete=models.CASCADE)
+    car = models.ForeignKey(
+        Car,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+    )
     service = models.ForeignKey(Service, on_delete=models.CASCADE)
 
     # معلومات العميل اللي يعبّيها من التطبيق
