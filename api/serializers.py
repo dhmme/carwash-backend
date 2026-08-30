@@ -14,9 +14,31 @@ class CarSerializer(serializers.ModelSerializer):
     class Meta:
         model = Car
         fields = [
-            'id', 'vehicle_type', 'size', 'brand', 'model', 'color',
-            'plate_number',
+            'id', 'category', 'vehicle_name', 'vehicle_type', 'size',
+            'brand', 'model', 'color', 'plate_number', 'image_data',
         ]
+        extra_kwargs = {
+            'brand': {'required': False},
+            'model': {'required': False},
+            'vehicle_type': {'required': False},
+            'size': {'required': False},
+        }
+
+    def validate(self, attrs):
+        category = attrs.get('category', 'sedan')
+        attrs['size'] = 'big' if category == 'family_suv' else 'small'
+        attrs['vehicle_type'] = dict(Car.CATEGORY_CHOICES).get(
+            category, 'سيدان'
+        )
+        vehicle_name = attrs.get('vehicle_name', 'مركبة').strip()
+        image_data = attrs.get('image_data', '')
+        if len(image_data) > 2_500_000:
+            raise serializers.ValidationError({
+                'image_data': 'حجم الصورة كبير، اختر صورة أصغر.'
+            })
+        attrs['brand'] = vehicle_name
+        attrs['model'] = ''
+        return attrs
 
 
 class LocationSerializer(serializers.ModelSerializer):
