@@ -6,11 +6,12 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 
-from .models import Booking, Car, Service
+from .models import Booking, Car, Location, Service
 from .serializers import (
     BookingSerializer,
     BookingStatusSerializer,
     CarSerializer,
+    LocationSerializer,
     RegisterSerializer,
     ServiceSerializer,
     UserSerializer,
@@ -78,6 +79,19 @@ def car_list_create(request):
         return Response(CarSerializer(cars, many=True).data)
 
     serializer = CarSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    serializer.save(user=request.user)
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def location_list_create(request):
+    if request.method == 'GET':
+        locations = Location.objects.filter(user=request.user).order_by('-id')
+        return Response(LocationSerializer(locations, many=True).data)
+
+    serializer = LocationSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     serializer.save(user=request.user)
     return Response(serializer.data, status=status.HTTP_201_CREATED)
