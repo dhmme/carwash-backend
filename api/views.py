@@ -6,9 +6,10 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 
-from .models import Booking, Car, Location, Service
+from .models import AddOn, Booking, Car, Location, Service
 from .serializers import (
     BookingSerializer,
+    AddOnSerializer,
     BookingStatusSerializer,
     CarSerializer,
     LocationSerializer,
@@ -69,6 +70,13 @@ def logout_view(request):
 def service_list(request):
     services = Service.objects.filter(is_active=True)
     return Response(ServiceSerializer(services, many=True).data)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def add_on_list(request):
+    add_ons = AddOn.objects.filter(is_active=True)
+    return Response(AddOnSerializer(add_ons, many=True).data)
 
 
 @api_view(['GET', 'POST'])
