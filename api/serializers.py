@@ -1,13 +1,19 @@
 from django.contrib.auth.models import User
 from django.db import IntegrityError, transaction
 from rest_framework import serializers
-from .models import Service, Car, Booking, Location
+from .models import AddOn, Service, Car, Booking, Location
 
 
 class ServiceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Service
         fields = '__all__'
+
+
+class AddOnSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AddOn
+        fields = ['id', 'name', 'unit', 'price', 'allows_quantity']
 
 
 class CarSerializer(serializers.ModelSerializer):
@@ -78,6 +84,7 @@ class BookingSerializer(serializers.ModelSerializer):
             'customer_name', 'customer_phone', 'car_size', 'address_text',
             'latitude', 'longitude', 'maps_url', 'date', 'time_slot',
             'status', 'payment_method', 'total_price', 'created_at',
+            'add_ons',
         ]
         read_only_fields = ['status', 'total_price', 'created_at']
 
@@ -97,16 +104,37 @@ class BookingSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         request = self.context['request']
         service = validated_data['service']
+        requested_add_ons = validated_data.pop('add_ons', [])
         car_size = validated_data.get('car_size')
         total_price = service.price
         if service.name.strip() == 'غسيل كامل' and car_size == 'big':
             total_price += 10
+
+        add_on_snapshot = []
+        for item in requested_add_ons:
+            try:
+                add_on = AddOn.objects.get(pk=item.get('id'), is_active=True)
+            except (AddOn.DoesNotExist, TypeError, ValueError):
+                continue
+            quantity = int(item.get('quantity', 1)) if add_on.allows_quantity else 1
+            quantity = max(1, min(quantity, 20))
+            subtotal = add_on.price * quantity
+            total_price += subtotal
+            add_on_snapshot.append({
+                'id': add_on.id,
+                'name': add_on.name,
+                'unit': add_on.unit,
+                'quantity': quantity,
+                'unit_price': str(add_on.price),
+                'subtotal': str(subtotal),
+            })
 
         try:
             with transaction.atomic():
                 return Booking.objects.create(
                     customer=request.user,
                     total_price=total_price,
+                    add_ons=add_on_snapshot,
                     **validated_data,
                 )
         except IntegrityError as exc:
