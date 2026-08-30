@@ -13,17 +13,29 @@ class Service(models.Model):
 
 class Car(models.Model):
     SIZE_CHOICES = [('small', 'صغيرة'), ('big', 'كبيرة')]
+    CATEGORY_CHOICES = [
+        ('sedan', 'سيدان'),
+        ('small_suv', 'جيب صغير'),
+        ('family_suv', 'جيب عائلي'),
+    ]
 
     user = models.ForeignKey(User, on_delete=models.CASCADE)
+    category = models.CharField(
+        max_length=20,
+        choices=CATEGORY_CHOICES,
+        default='sedan',
+    )
+    vehicle_name = models.CharField(max_length=100, default='مركبة')
     vehicle_type = models.CharField(max_length=100, default='سيارة')
     size = models.CharField(max_length=10, choices=SIZE_CHOICES, default='small')
     brand = models.CharField(max_length=100)
     model = models.CharField(max_length=100)
     color = models.CharField(max_length=50)
     plate_number = models.CharField(max_length=20)
+    image_data = models.TextField(blank=True, default='')
 
     def __str__(self):
-        return f"{self.brand} {self.model} ({self.plate_number})"
+        return f"{self.vehicle_name} ({self.plate_number})"
 
 
 class Location(models.Model):
