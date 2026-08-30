@@ -11,6 +11,7 @@ from .views import (
     logout_view,
     update_booking_status,
     location_list_create,
+    add_on_list,
 )
 
 urlpatterns = [
@@ -21,6 +22,7 @@ urlpatterns = [
 
     # Services
     path('services/', service_list, name='service-list'),
+    path('add-ons/', add_on_list, name='add-on-list'),
 
     # Cars
     path('cars/', car_list_create, name='car-list-create'),
