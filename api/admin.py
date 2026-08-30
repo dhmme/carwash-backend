@@ -1,12 +1,18 @@
 from django.contrib import admin
 from django.utils.html import format_html
 
-from .models import Service, Car, Booking
+from .models import AddOn, Service, Car, Booking
 
 
 @admin.register(Service)
 class ServiceAdmin(admin.ModelAdmin):
     list_display = ('id', 'name', 'price')
+
+
+@admin.register(AddOn)
+class AddOnAdmin(admin.ModelAdmin):
+    list_display = ('id', 'name', 'unit', 'price', 'allows_quantity', 'is_active')
+    list_editable = ('price', 'is_active')
 
 
 @admin.register(Car)
