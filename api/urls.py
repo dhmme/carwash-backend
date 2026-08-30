@@ -10,6 +10,7 @@ from .views import (
     login_view,
     logout_view,
     update_booking_status,
+    location_list_create,
 )
 
 urlpatterns = [
@@ -23,6 +24,7 @@ urlpatterns = [
 
     # Cars
     path('cars/', car_list_create, name='car-list-create'),
+    path('locations/', location_list_create, name='location-list-create'),
 
     # Bookings
     path('bookings/', booking_list_create, name='booking-list-create'),
