@@ -1,7 +1,7 @@
 from django.contrib.auth.models import User
 from django.db import IntegrityError, transaction
 from rest_framework import serializers
-from .models import Service, Car, Booking
+from .models import Service, Car, Booking, Location
 
 
 class ServiceSerializer(serializers.ModelSerializer):
@@ -13,7 +13,16 @@ class ServiceSerializer(serializers.ModelSerializer):
 class CarSerializer(serializers.ModelSerializer):
     class Meta:
         model = Car
-        fields = ['id', 'brand', 'model', 'color', 'plate_number']
+        fields = [
+            'id', 'vehicle_type', 'size', 'brand', 'model', 'color',
+            'plate_number',
+        ]
+
+
+class LocationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Location
+        fields = ['id', 'name', 'address_text', 'latitude', 'longitude']
 
 
 class UserSerializer(serializers.ModelSerializer):
