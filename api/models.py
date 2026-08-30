@@ -12,7 +12,11 @@ class Service(models.Model):
 
 
 class Car(models.Model):
+    SIZE_CHOICES = [('small', 'صغيرة'), ('big', 'كبيرة')]
+
     user = models.ForeignKey(User, on_delete=models.CASCADE)
+    vehicle_type = models.CharField(max_length=100, default='سيارة')
+    size = models.CharField(max_length=10, choices=SIZE_CHOICES, default='small')
     brand = models.CharField(max_length=100)
     model = models.CharField(max_length=100)
     color = models.CharField(max_length=50)
@@ -20,6 +24,18 @@ class Car(models.Model):
 
     def __str__(self):
         return f"{self.brand} {self.model} ({self.plate_number})"
+
+
+class Location(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    name = models.CharField(max_length=100)
+    address_text = models.CharField(max_length=255)
+    latitude = models.FloatField()
+    longitude = models.FloatField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.name} - {self.user.username}"
 
 
 class Booking(models.Model):
