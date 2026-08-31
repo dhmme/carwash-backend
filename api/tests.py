@@ -4,7 +4,7 @@ from django.contrib.auth.models import User
 from rest_framework.authtoken.models import Token
 from rest_framework.test import APITestCase
 
-from .models import Booking, Service, Invoice
+from .models import Booking, Service, Invoice, Expense
 
 
 class AuthAndBookingTests(APITestCase):
@@ -117,3 +117,21 @@ class AuthAndBookingTests(APITestCase):
             'name': 'غسيل تجريبي', 'description': '', 'price': '60.00', 'is_active': True,
         })
         self.assertEqual(response.status_code, 201)
+
+    def test_manager_ledger_calculates_cash_and_expenses(self):
+        manager = User.objects.create_superuser(
+            username='0550000066', password='password123'
+        )
+        Booking.objects.create(
+            customer=self.user, service=self.service, date=date.today(),
+            time_slot='12 مساءً', total_price=100, status='completed', payment_method='cash',
+        )
+        Expense.objects.create(
+            date=date.today(), description='وقود', amount=25, payment_method='cash', created_by=manager,
+        )
+        self.authenticate(manager)
+        response = self.client.get('/api/manager/ledger/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['total_receipts'], 100)
+        self.assertEqual(response.data['total_expenses'], 25)
+        self.assertEqual(response.data['cash_available'], 75)

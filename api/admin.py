@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.utils.html import format_html
 
-from .models import AddOn, Service, Car, Booking, VehicleCategory, Invoice
+from .models import AddOn, Service, Car, Booking, VehicleCategory, Invoice, Expense
 
 
 @admin.register(Service)
@@ -24,6 +24,12 @@ class VehicleCategoryAdmin(admin.ModelAdmin):
 @admin.register(Invoice)
 class InvoiceAdmin(admin.ModelAdmin):
     list_display = ('number', 'booking', 'issued_at')
+
+
+@admin.register(Expense)
+class ExpenseAdmin(admin.ModelAdmin):
+    list_display = ('date', 'description', 'category', 'amount', 'payment_method')
+    list_filter = ('date', 'payment_method', 'category')
 
 
 @admin.register(Car)

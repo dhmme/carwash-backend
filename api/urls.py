@@ -17,6 +17,7 @@ from .views import (
     manager_add_ons, manager_add_on_detail, manager_categories,
     manager_category_detail, manager_bookings, manager_invoices,
     manager_workers, manager_worker_detail,
+    manager_ledger, manager_expenses, manager_expense_detail,
 )
 
 urlpatterns = [
@@ -56,5 +57,8 @@ urlpatterns = [
     path('manager/invoices/', manager_invoices),
     path('manager/workers/', manager_workers),
     path('manager/workers/<int:item_id>/', manager_worker_detail),
+    path('manager/ledger/', manager_ledger),
+    path('manager/expenses/', manager_expenses),
+    path('manager/expenses/<int:item_id>/', manager_expense_detail),
 
 ]
