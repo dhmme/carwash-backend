@@ -81,3 +81,20 @@ class AuthAndBookingTests(APITestCase):
         self.authenticate()
         response = self.client.get('/api/worker/bookings/')
         self.assertEqual(response.status_code, 403)
+
+    def test_completed_booking_is_hidden_from_worker_list(self):
+        worker = User.objects.create_user(
+            username='0550000099', password='password123', is_staff=True
+        )
+        Booking.objects.create(
+            customer=self.user,
+            service=self.service,
+            date=date.today(),
+            time_slot='11 صباحاً',
+            total_price=35,
+            status='completed',
+        )
+        self.authenticate(worker)
+        response = self.client.get('/api/worker/bookings/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, [])

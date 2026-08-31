@@ -147,9 +147,9 @@ def booked_slots(request):
 @permission_classes([IsAdminUser])
 def worker_bookings(request):
     date = request.GET.get('date') or timezone.localdate()
-    bookings = Booking.objects.filter(date=date).select_related(
-        'service', 'car', 'customer'
-    ).order_by('time_slot')
+    bookings = Booking.objects.filter(date=date).exclude(
+        status__in=['completed', 'canceled']
+    ).select_related('service', 'car', 'customer').order_by('time_slot')
     return Response(WorkerBookingSerializer(bookings, many=True).data)
 
 
