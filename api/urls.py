@@ -12,6 +12,11 @@ from .views import (
     update_booking_status,
     location_list_create,
     add_on_list,
+    vehicle_category_list,
+    manager_dashboard, manager_services, manager_service_detail,
+    manager_add_ons, manager_add_on_detail, manager_categories,
+    manager_category_detail, manager_bookings, manager_invoices,
+    manager_workers, manager_worker_detail,
 )
 
 urlpatterns = [
@@ -23,6 +28,7 @@ urlpatterns = [
     # Services
     path('services/', service_list, name='service-list'),
     path('add-ons/', add_on_list, name='add-on-list'),
+    path('vehicle-categories/', vehicle_category_list, name='vehicle-category-list'),
 
     # Cars
     path('cars/', car_list_create, name='car-list-create'),
@@ -38,5 +44,17 @@ urlpatterns = [
     path('worker/bookings/', worker_bookings, name='worker-bookings'),
     path('worker/bookings/<int:booking_id>/status/', update_booking_status,
          name='worker-booking-status'),
+
+    path('manager/dashboard/', manager_dashboard),
+    path('manager/services/', manager_services),
+    path('manager/services/<int:item_id>/', manager_service_detail),
+    path('manager/add-ons/', manager_add_ons),
+    path('manager/add-ons/<int:item_id>/', manager_add_on_detail),
+    path('manager/categories/', manager_categories),
+    path('manager/categories/<int:item_id>/', manager_category_detail),
+    path('manager/bookings/', manager_bookings),
+    path('manager/invoices/', manager_invoices),
+    path('manager/workers/', manager_workers),
+    path('manager/workers/<int:item_id>/', manager_worker_detail),
 
 ]

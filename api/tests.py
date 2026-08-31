@@ -4,7 +4,7 @@ from django.contrib.auth.models import User
 from rest_framework.authtoken.models import Token
 from rest_framework.test import APITestCase
 
-from .models import Booking, Service
+from .models import Booking, Service, Invoice
 
 
 class AuthAndBookingTests(APITestCase):
@@ -63,6 +63,7 @@ class AuthAndBookingTests(APITestCase):
         self.assertEqual(booking.customer, self.user)
         self.assertEqual(booking.total_price, self.service.price)
         self.assertEqual(booking.status, 'accepted')
+        self.assertTrue(Invoice.objects.filter(booking=booking).exists())
 
     def test_customer_only_sees_own_bookings(self):
         Booking.objects.create(
@@ -98,3 +99,21 @@ class AuthAndBookingTests(APITestCase):
         response = self.client.get('/api/worker/bookings/')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data, [])
+
+    def test_worker_cannot_access_manager_dashboard(self):
+        worker = User.objects.create_user(
+            username='0550000088', password='password123', is_staff=True
+        )
+        self.authenticate(worker)
+        response = self.client.get('/api/manager/dashboard/')
+        self.assertEqual(response.status_code, 403)
+
+    def test_manager_can_manage_services(self):
+        manager = User.objects.create_superuser(
+            username='0550000077', password='password123'
+        )
+        self.authenticate(manager)
+        response = self.client.post('/api/manager/services/', {
+            'name': 'غسيل تجريبي', 'description': '', 'price': '60.00', 'is_active': True,
+        })
+        self.assertEqual(response.status_code, 201)
