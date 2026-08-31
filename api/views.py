@@ -148,7 +148,7 @@ def booked_slots(request):
 def worker_bookings(request):
     date = request.GET.get('date') or timezone.localdate()
     bookings = Booking.objects.filter(date=date).select_related(
-        'service'
+        'service', 'car', 'customer'
     ).order_by('time_slot')
     return Response(WorkerBookingSerializer(bookings, many=True).data)
 

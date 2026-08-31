@@ -153,10 +153,12 @@ class BookingStatusSerializer(serializers.ModelSerializer):
 
 
 class WorkerBookingSerializer(serializers.ModelSerializer):
-    customer_name = serializers.CharField(read_only=True)
-    customer_phone = serializers.CharField(read_only=True)
-    car_size = serializers.CharField(read_only=True)
-
+    customer_name = serializers.SerializerMethodField()
+    customer_phone = serializers.SerializerMethodField()
+    car_name = serializers.CharField(source='car.vehicle_name', read_only=True)
+    car_category = serializers.CharField(source='car.category', read_only=True)
+    car_color = serializers.CharField(source='car.color', read_only=True)
+    plate_number = serializers.CharField(source='car.plate_number', read_only=True)
     service_name = serializers.CharField(source='service.name', read_only=True)
     maps_url = serializers.SerializerMethodField()
 
@@ -170,13 +172,25 @@ class WorkerBookingSerializer(serializers.ModelSerializer):
             'customer_name',
             'customer_phone',
             'car_size',
+            'car_name',
+            'car_category',
+            'car_color',
+            'plate_number',
             'service_name',
+            'address_text',
             'latitude',
             'longitude',
             'maps_url',
             'total_price',
             'payment_method',
+            'add_ons',
         ]
+
+    def get_customer_name(self, obj):
+        return obj.customer_name or obj.customer.first_name or obj.customer.username
+
+    def get_customer_phone(self, obj):
+        return obj.customer_phone or obj.customer.username
 
     def get_maps_url(self, obj):
         if obj.latitude is not None and obj.longitude is not None:
