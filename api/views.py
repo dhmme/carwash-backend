@@ -1,4 +1,6 @@
 from django.contrib.auth import authenticate
+from django.contrib.auth.models import User
+from django.db.models import Count, Sum
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.authtoken.models import Token
@@ -6,7 +8,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 
-from .models import AddOn, Booking, Car, Location, Service
+from .models import AddOn, Booking, Car, Location, Service, VehicleCategory, Invoice
+from .permissions import IsManager
 from .serializers import (
     BookingSerializer,
     AddOnSerializer,
@@ -17,6 +20,10 @@ from .serializers import (
     ServiceSerializer,
     UserSerializer,
     WorkerBookingSerializer,
+    VehicleCategorySerializer,
+    ManagerBookingSerializer,
+    InvoiceSerializer,
+    ManagerStaffSerializer,
 )
 
 
@@ -55,6 +62,7 @@ def login_view(request):
         'token': token.key,
         'user': UserSerializer(user).data,
         'is_staff': user.is_staff,
+        'is_superuser': user.is_superuser,
     })
 
 
@@ -77,6 +85,13 @@ def service_list(request):
 def add_on_list(request):
     add_ons = AddOn.objects.filter(is_active=True)
     return Response(AddOnSerializer(add_ons, many=True).data)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def vehicle_category_list(request):
+    categories = VehicleCategory.objects.filter(is_active=True).order_by('id')
+    return Response(VehicleCategorySerializer(categories, many=True).data)
 
 
 @api_view(['GET', 'POST'])
@@ -168,6 +183,127 @@ def update_booking_status(request, booking_id):
         data=request.data,
         partial=True,
     )
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data)
+
+
+@api_view(['GET'])
+@permission_classes([IsManager])
+def manager_dashboard(request):
+    today = timezone.localdate()
+    today_qs = Booking.objects.filter(date=today)
+    month_qs = Booking.objects.filter(date__year=today.year, date__month=today.month)
+    return Response({
+        'today_total': today_qs.count(),
+        'today_active': today_qs.exclude(status__in=['completed', 'canceled']).count(),
+        'today_completed': today_qs.filter(status='completed').count(),
+        'today_revenue': today_qs.exclude(status='canceled').aggregate(v=Sum('total_price'))['v'] or 0,
+        'month_revenue': month_qs.exclude(status='canceled').aggregate(v=Sum('total_price'))['v'] or 0,
+        'customers': User.objects.filter(is_staff=False).count(),
+        'workers': User.objects.filter(is_staff=True, is_superuser=False, is_active=True).count(),
+    })
+
+
+def _catalog(request, model, serializer_class):
+    if request.method == 'GET':
+        return Response(serializer_class(model.objects.all().order_by('id'), many=True).data)
+    serializer = serializer_class(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+def _catalog_detail(request, model, serializer_class, item_id):
+    try:
+        item = model.objects.get(pk=item_id)
+    except model.DoesNotExist:
+        return Response({'detail': 'العنصر غير موجود.'}, status=status.HTTP_404_NOT_FOUND)
+    if request.method == 'DELETE':
+        item.is_active = False
+        item.save(update_fields=['is_active'])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+    serializer = serializer_class(item, data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsManager])
+def manager_services(request):
+    return _catalog(request, Service, ServiceSerializer)
+
+
+@api_view(['PATCH', 'DELETE'])
+@permission_classes([IsManager])
+def manager_service_detail(request, item_id):
+    return _catalog_detail(request, Service, ServiceSerializer, item_id)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsManager])
+def manager_add_ons(request):
+    return _catalog(request, AddOn, AddOnSerializer)
+
+
+@api_view(['PATCH', 'DELETE'])
+@permission_classes([IsManager])
+def manager_add_on_detail(request, item_id):
+    return _catalog_detail(request, AddOn, AddOnSerializer, item_id)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsManager])
+def manager_categories(request):
+    return _catalog(request, VehicleCategory, VehicleCategorySerializer)
+
+
+@api_view(['PATCH', 'DELETE'])
+@permission_classes([IsManager])
+def manager_category_detail(request, item_id):
+    return _catalog_detail(request, VehicleCategory, VehicleCategorySerializer, item_id)
+
+
+@api_view(['GET'])
+@permission_classes([IsManager])
+def manager_bookings(request):
+    bookings = Booking.objects.select_related('service', 'car', 'customer', 'invoice').order_by('-date', '-id')
+    status_filter = request.GET.get('status')
+    if status_filter:
+        bookings = bookings.filter(status=status_filter)
+    return Response(ManagerBookingSerializer(bookings[:500], many=True).data)
+
+
+@api_view(['GET'])
+@permission_classes([IsManager])
+def manager_invoices(request):
+    for booking in Booking.objects.exclude(status='canceled').filter(invoice__isnull=True):
+        Invoice.objects.get_or_create(booking=booking)
+    invoices = Invoice.objects.select_related('booking__service', 'booking__customer').order_by('-id')
+    return Response(InvoiceSerializer(invoices[:500], many=True).data)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsManager])
+def manager_workers(request):
+    if request.method == 'GET':
+        workers = User.objects.filter(is_staff=True, is_superuser=False).order_by('id')
+        return Response(ManagerStaffSerializer(workers, many=True).data)
+    serializer = ManagerStaffSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['PATCH'])
+@permission_classes([IsManager])
+def manager_worker_detail(request, item_id):
+    try:
+        worker = User.objects.get(pk=item_id, is_staff=True, is_superuser=False)
+    except User.DoesNotExist:
+        return Response({'detail': 'العامل غير موجود.'}, status=status.HTTP_404_NOT_FOUND)
+    serializer = ManagerStaffSerializer(worker, data=request.data, partial=True)
     serializer.is_valid(raise_exception=True)
     serializer.save()
     return Response(serializer.data)

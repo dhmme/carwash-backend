@@ -1,7 +1,7 @@
 from django.contrib.auth.models import User
 from django.db import IntegrityError, transaction
 from rest_framework import serializers
-from .models import AddOn, Service, Car, Booking, Location
+from .models import AddOn, Service, Car, Booking, Location, VehicleCategory, Invoice
 
 
 class ServiceSerializer(serializers.ModelSerializer):
@@ -13,7 +13,13 @@ class ServiceSerializer(serializers.ModelSerializer):
 class AddOnSerializer(serializers.ModelSerializer):
     class Meta:
         model = AddOn
-        fields = ['id', 'name', 'unit', 'price', 'allows_quantity']
+        fields = ['id', 'name', 'unit', 'price', 'allows_quantity', 'is_active']
+
+
+class VehicleCategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = VehicleCategory
+        fields = ['id', 'key', 'name', 'price_adjustment', 'is_active']
 
 
 class CarSerializer(serializers.ModelSerializer):
@@ -33,9 +39,10 @@ class CarSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         category = attrs.get('category', 'sedan')
         attrs['size'] = 'big' if category == 'family_suv' else 'small'
-        attrs['vehicle_type'] = dict(Car.CATEGORY_CHOICES).get(
-            category, 'سيدان'
-        )
+        category_record = VehicleCategory.objects.filter(key=category, is_active=True).first()
+        if not category_record:
+            raise serializers.ValidationError({'category': 'فئة المركبة غير متاحة.'})
+        attrs['vehicle_type'] = category_record.name
         vehicle_name = attrs.get('vehicle_name', 'مركبة').strip()
         image_data = attrs.get('image_data', '')
         if len(image_data) > 2_500_000:
@@ -107,7 +114,12 @@ class BookingSerializer(serializers.ModelSerializer):
         requested_add_ons = validated_data.pop('add_ons', [])
         car_size = validated_data.get('car_size')
         total_price = service.price
-        if service.name.strip() == 'غسيل كامل' and car_size == 'big':
+        car = validated_data.get('car')
+        category_key = car.category if car else None
+        category = VehicleCategory.objects.filter(key=category_key, is_active=True).first()
+        if category:
+            total_price += category.price_adjustment
+        elif service.name.strip() == 'غسيل كامل' and car_size == 'big':
             total_price += 10
 
         add_on_snapshot = []
@@ -131,13 +143,15 @@ class BookingSerializer(serializers.ModelSerializer):
 
         try:
             with transaction.atomic():
-                return Booking.objects.create(
+                booking = Booking.objects.create(
                     customer=request.user,
                     status='accepted',
                     total_price=total_price,
                     add_ons=add_on_snapshot,
                     **validated_data,
                 )
+                Invoice.objects.create(booking=booking)
+                return booking
         except IntegrityError as exc:
             raise serializers.ValidationError({
                 'time_slot': 'هذا الوقت محجوز بالفعل، اختر وقتاً آخر.'
@@ -197,3 +211,55 @@ class WorkerBookingSerializer(serializers.ModelSerializer):
         if obj.latitude is not None and obj.longitude is not None:
             return f"https://www.google.com/maps?q={obj.latitude},{obj.longitude}"
         return None
+
+
+class ManagerBookingSerializer(WorkerBookingSerializer):
+    created_at = serializers.DateTimeField(read_only=True)
+    invoice_number = serializers.CharField(source='invoice.number', read_only=True, default='')
+
+    class Meta(WorkerBookingSerializer.Meta):
+        fields = WorkerBookingSerializer.Meta.fields + ['created_at', 'invoice_number']
+
+
+class InvoiceSerializer(serializers.ModelSerializer):
+    customer_name = serializers.SerializerMethodField()
+    customer_phone = serializers.SerializerMethodField()
+    service_name = serializers.CharField(source='booking.service.name', read_only=True)
+    date = serializers.DateField(source='booking.date', read_only=True)
+    total = serializers.DecimalField(source='booking.total_price', max_digits=10, decimal_places=2, read_only=True)
+    payment_method = serializers.CharField(source='booking.payment_method', read_only=True)
+    add_ons = serializers.JSONField(source='booking.add_ons', read_only=True)
+
+    class Meta:
+        model = Invoice
+        fields = ['id', 'number', 'booking', 'issued_at', 'customer_name', 'customer_phone',
+                  'service_name', 'date', 'total', 'payment_method', 'add_ons', 'notes']
+
+    def get_customer_name(self, obj):
+        b = obj.booking
+        return b.customer_name or b.customer.first_name or b.customer.username
+
+    def get_customer_phone(self, obj):
+        return obj.booking.customer_phone or obj.booking.customer.username
+
+
+class ManagerStaffSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True, required=False, min_length=8)
+
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'first_name', 'is_active', 'password']
+
+    def create(self, validated_data):
+        password = validated_data.pop('password')
+        return User.objects.create_user(password=password, is_staff=True, **validated_data)
+
+    def update(self, instance, validated_data):
+        password = validated_data.pop('password', None)
+        for key, value in validated_data.items():
+            setattr(instance, key, value)
+        instance.is_staff = True
+        if password:
+            instance.set_password(password)
+        instance.save()
+        return instance

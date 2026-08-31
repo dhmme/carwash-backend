@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.utils.html import format_html
 
-from .models import AddOn, Service, Car, Booking
+from .models import AddOn, Service, Car, Booking, VehicleCategory, Invoice
 
 
 @admin.register(Service)
@@ -13,6 +13,17 @@ class ServiceAdmin(admin.ModelAdmin):
 class AddOnAdmin(admin.ModelAdmin):
     list_display = ('id', 'name', 'unit', 'price', 'allows_quantity', 'is_active')
     list_editable = ('price', 'is_active')
+
+
+@admin.register(VehicleCategory)
+class VehicleCategoryAdmin(admin.ModelAdmin):
+    list_display = ('key', 'name', 'price_adjustment', 'is_active')
+    list_editable = ('price_adjustment', 'is_active')
+
+
+@admin.register(Invoice)
+class InvoiceAdmin(admin.ModelAdmin):
+    list_display = ('number', 'booking', 'issued_at')
 
 
 @admin.register(Car)

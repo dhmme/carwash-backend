@@ -22,6 +22,16 @@ class AddOn(models.Model):
         return self.name
 
 
+class VehicleCategory(models.Model):
+    key = models.CharField(max_length=30, unique=True)
+    name = models.CharField(max_length=100)
+    price_adjustment = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    is_active = models.BooleanField(default=True)
+
+    def __str__(self):
+        return self.name
+
+
 class Car(models.Model):
     SIZE_CHOICES = [('small', 'صغيرة'), ('big', 'كبيرة')]
     CATEGORY_CHOICES = [
@@ -33,7 +43,6 @@ class Car(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     category = models.CharField(
         max_length=20,
-        choices=CATEGORY_CHOICES,
         default='sedan',
     )
     vehicle_name = models.CharField(max_length=100, default='مركبة')
@@ -140,3 +149,20 @@ class Booking(models.Model):
         if self.latitude is not None and self.longitude is not None:
             return f"https://www.google.com/maps?q={self.latitude},{self.longitude}"
         return None
+
+
+class Invoice(models.Model):
+    booking = models.OneToOneField(Booking, on_delete=models.CASCADE, related_name='invoice')
+    number = models.CharField(max_length=30, unique=True, blank=True)
+    issued_at = models.DateTimeField(auto_now_add=True)
+    notes = models.CharField(max_length=255, blank=True)
+
+    def save(self, *args, **kwargs):
+        if not self.number:
+            super().save(*args, **kwargs)
+            self.number = f'INV-{self.issued_at:%Y%m%d}-{self.pk:05d}'
+            return super().save(update_fields=['number'])
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.number or f'Invoice {self.pk}'
