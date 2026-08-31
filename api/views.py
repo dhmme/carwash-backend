@@ -2,13 +2,15 @@ from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.db.models import Count, Sum
 from django.utils import timezone
+from django.utils.dateparse import parse_date
+from decimal import Decimal
 from rest_framework import status
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 
-from .models import AddOn, Booking, Car, Location, Service, VehicleCategory, Invoice
+from .models import AddOn, Booking, Car, Location, Service, VehicleCategory, Invoice, Expense
 from .permissions import IsManager
 from .serializers import (
     BookingSerializer,
@@ -24,6 +26,7 @@ from .serializers import (
     ManagerBookingSerializer,
     InvoiceSerializer,
     ManagerStaffSerializer,
+    ExpenseSerializer,
 )
 
 
@@ -304,6 +307,87 @@ def manager_worker_detail(request, item_id):
     except User.DoesNotExist:
         return Response({'detail': 'العامل غير موجود.'}, status=status.HTTP_404_NOT_FOUND)
     serializer = ManagerStaffSerializer(worker, data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data)
+
+
+@api_view(['GET'])
+@permission_classes([IsManager])
+def manager_ledger(request):
+    today = timezone.localdate()
+    date_from = parse_date(request.GET.get('from', '')) or today
+    date_to = parse_date(request.GET.get('to', '')) or date_from
+    if date_to < date_from:
+        return Response({'detail': 'تاريخ النهاية يجب أن يكون بعد البداية.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    income = Booking.objects.filter(
+        date__range=(date_from, date_to), status='completed'
+    ).select_related('service', 'customer')
+    expenses = Expense.objects.filter(date__range=(date_from, date_to)).select_related('created_by')
+
+    def total(queryset, method=None):
+        if method:
+            queryset = queryset.filter(payment_method=method)
+        return queryset.aggregate(value=Sum('total_price' if queryset.model is Booking else 'amount'))['value'] or Decimal('0')
+
+    cash_income, card_income, transfer_income = total(income, 'cash'), total(income, 'card'), total(income, 'bank_transfer')
+    cash_expense, card_expense, transfer_expense = total(expenses, 'cash'), total(expenses, 'card'), total(expenses, 'bank_transfer')
+    receipts = cash_income + card_income + transfer_income
+    expense_total = cash_expense + card_expense + transfer_expense
+
+    movements = []
+    for booking in income:
+        movements.append({
+            'type': 'income', 'date': booking.date, 'description': f'طلب #{booking.id} - {booking.service.name}',
+            'amount': booking.total_price, 'payment_method': booking.payment_method,
+        })
+    for expense in expenses:
+        movements.append({
+            'type': 'expense', 'id': expense.id, 'date': expense.date,
+            'description': expense.description, 'category': expense.category,
+            'amount': expense.amount, 'payment_method': expense.payment_method,
+        })
+    movements.sort(key=lambda item: (str(item['date']), item.get('id', 0)), reverse=True)
+
+    return Response({
+        'from': date_from, 'to': date_to,
+        'total_receipts': receipts,
+        'total_expenses': expense_total,
+        'cash_available': cash_income - cash_expense,
+        'net_non_cash': (card_income + transfer_income) - (card_expense + transfer_expense),
+        'net_total': receipts - expense_total,
+        'breakdown': {
+            'cash_income': cash_income, 'card_income': card_income, 'transfer_income': transfer_income,
+            'cash_expenses': cash_expense, 'card_expenses': card_expense, 'transfer_expenses': transfer_expense,
+        },
+        'movements': movements,
+    })
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsManager])
+def manager_expenses(request):
+    if request.method == 'GET':
+        expenses = Expense.objects.select_related('created_by').order_by('-date', '-id')[:500]
+        return Response(ExpenseSerializer(expenses, many=True).data)
+    serializer = ExpenseSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    serializer.save(created_by=request.user)
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['PATCH', 'DELETE'])
+@permission_classes([IsManager])
+def manager_expense_detail(request, item_id):
+    try:
+        expense = Expense.objects.get(pk=item_id)
+    except Expense.DoesNotExist:
+        return Response({'detail': 'المصروف غير موجود.'}, status=status.HTTP_404_NOT_FOUND)
+    if request.method == 'DELETE':
+        expense.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+    serializer = ExpenseSerializer(expense, data=request.data, partial=True)
     serializer.is_valid(raise_exception=True)
     serializer.save()
     return Response(serializer.data)

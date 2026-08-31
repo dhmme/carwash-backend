@@ -166,3 +166,17 @@ class Invoice(models.Model):
 
     def __str__(self):
         return self.number or f'Invoice {self.pk}'
+
+
+class Expense(models.Model):
+    PAYMENT_METHOD_CHOICES = Booking.PAYMENT_METHOD_CHOICES
+    date = models.DateField()
+    description = models.CharField(max_length=200)
+    category = models.CharField(max_length=100, blank=True, default='مصروف عام')
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    payment_method = models.CharField(max_length=20, choices=PAYMENT_METHOD_CHOICES, default='cash')
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'{self.description} - {self.amount}'

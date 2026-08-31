@@ -1,7 +1,7 @@
 from django.contrib.auth.models import User
 from django.db import IntegrityError, transaction
 from rest_framework import serializers
-from .models import AddOn, Service, Car, Booking, Location, VehicleCategory, Invoice
+from .models import AddOn, Service, Car, Booking, Location, VehicleCategory, Invoice, Expense
 
 
 class ServiceSerializer(serializers.ModelSerializer):
@@ -263,3 +263,13 @@ class ManagerStaffSerializer(serializers.ModelSerializer):
             instance.set_password(password)
         instance.save()
         return instance
+
+
+class ExpenseSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.CharField(source='created_by.first_name', read_only=True, default='')
+
+    class Meta:
+        model = Expense
+        fields = ['id', 'date', 'description', 'category', 'amount', 'payment_method',
+                  'created_by_name', 'created_at']
+        read_only_fields = ['created_by_name', 'created_at']
