@@ -62,6 +62,7 @@ class AuthAndBookingTests(APITestCase):
         booking = Booking.objects.get()
         self.assertEqual(booking.customer, self.user)
         self.assertEqual(booking.total_price, self.service.price)
+        self.assertEqual(booking.status, 'accepted')
 
     def test_customer_only_sees_own_bookings(self):
         Booking.objects.create(
