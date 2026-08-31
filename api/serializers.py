@@ -133,6 +133,7 @@ class BookingSerializer(serializers.ModelSerializer):
             with transaction.atomic():
                 return Booking.objects.create(
                     customer=request.user,
+                    status='accepted',
                     total_price=total_price,
                     add_ons=add_on_snapshot,
                     **validated_data,
