@@ -1,4 +1,6 @@
 from datetime import date
+from decimal import Decimal
+from urllib.parse import urlparse
 
 from django.contrib.auth.models import User
 from rest_framework.authtoken.models import Token
@@ -63,7 +65,20 @@ class AuthAndBookingTests(APITestCase):
         self.assertEqual(booking.customer, self.user)
         self.assertEqual(booking.total_price, self.service.price)
         self.assertEqual(booking.status, 'accepted')
-        self.assertTrue(Invoice.objects.filter(booking=booking).exists())
+        invoice = Invoice.objects.get(booking=booking)
+        self.assertEqual(invoice.total_amount, self.service.price)
+        self.assertEqual(invoice.line_items[0]['name'], self.service.name)
+        self.assertEqual(
+            Decimal(invoice.line_items[0]['subtotal']),
+            invoice.total_amount,
+        )
+
+        invoice_url = response.data['invoice_url']
+        self.assertIn('/api/invoices/', invoice_url)
+        self.client.credentials()
+        invoice_response = self.client.get(urlparse(invoice_url).path)
+        self.assertEqual(invoice_response.status_code, 200)
+        self.assertContains(invoice_response, self.service.name)
 
     def test_customer_only_sees_own_bookings(self):
         Booking.objects.create(

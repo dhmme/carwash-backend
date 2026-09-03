@@ -4,6 +4,7 @@ from django.db.models import Count, Sum
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from decimal import Decimal
+from django.shortcuts import get_object_or_404, render
 from rest_framework import status
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import api_view, permission_classes
@@ -284,7 +285,26 @@ def manager_invoices(request):
     for booking in Booking.objects.exclude(status='canceled').filter(invoice__isnull=True):
         Invoice.objects.get_or_create(booking=booking)
     invoices = Invoice.objects.select_related('booking__service', 'booking__customer').order_by('-id')
+    for invoice in invoices:
+        invoice.ensure_snapshot()
     return Response(InvoiceSerializer(invoices[:500], many=True).data)
+
+
+def invoice_print_view(request, token):
+    invoice = get_object_or_404(
+        Invoice.objects.select_related('booking__service', 'booking__customer'),
+        public_token=token,
+    )
+    invoice.ensure_snapshot()
+    booking = invoice.booking
+    payment_names = {'cash': 'كاش', 'card': 'شبكة', 'bank_transfer': 'تحويل بنكي'}
+    return render(request, 'api/invoice.html', {
+        'invoice': invoice,
+        'booking': booking,
+        'customer_name': booking.customer_name or booking.customer.first_name or booking.customer.username,
+        'customer_phone': booking.customer_phone or booking.customer.username,
+        'payment_name': payment_names.get(booking.payment_method, booking.payment_method),
+    })
 
 
 @api_view(['GET', 'POST'])

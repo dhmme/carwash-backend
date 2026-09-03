@@ -1,5 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import User
+import uuid
+from decimal import Decimal
 
 class Service(models.Model):
     name = models.CharField(max_length=100)
@@ -156,6 +158,9 @@ class Invoice(models.Model):
     number = models.CharField(max_length=30, unique=True, blank=True)
     issued_at = models.DateTimeField(auto_now_add=True)
     notes = models.CharField(max_length=255, blank=True)
+    public_token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    line_items = models.JSONField(default=list, blank=True)
+    total_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
     def save(self, *args, **kwargs):
         if not self.number:
@@ -166,6 +171,24 @@ class Invoice(models.Model):
 
     def __str__(self):
         return self.number or f'Invoice {self.pk}'
+
+    def ensure_snapshot(self):
+        if self.line_items and self.total_amount:
+            return
+        add_ons = self.booking.add_ons or []
+        add_on_total = sum(
+            (Decimal(str(item.get('subtotal', 0))) for item in add_ons),
+            Decimal('0'),
+        )
+        service_total = self.booking.total_price - add_on_total
+        self.line_items = [{
+            'name': self.booking.service.name,
+            'quantity': 1,
+            'unit_price': str(service_total),
+            'subtotal': str(service_total),
+        }, *add_ons]
+        self.total_amount = self.booking.total_price
+        self.save(update_fields=['line_items', 'total_amount'])
 
 
 class Expense(models.Model):

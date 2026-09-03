@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>فاتورة {{ invoice.number }}</title>
+  <style>
+    *{box-sizing:border-box} body{margin:0;background:#eef7fa;color:#12303a;font-family:Tahoma,Arial,sans-serif}
+    .page{width:min(820px,calc(100% - 24px));margin:28px auto;background:#fff;border-radius:20px;box-shadow:0 8px 28px #0a536522;overflow:hidden}
+    header{background:linear-gradient(135deg,#087ea4,#20a7d1);color:#fff;padding:30px;display:flex;justify-content:space-between;align-items:center}
+    h1{margin:0;font-size:30px}.brand{font-size:20px;font-weight:bold}.content{padding:28px}.meta{display:grid;grid-template-columns:repeat(2,1fr);gap:10px 30px;margin-bottom:25px}.meta div{padding:8px 0;border-bottom:1px solid #dcecef}.label{color:#66858f;font-size:13px;display:block;margin-bottom:3px}
+    table{width:100%;border-collapse:collapse;margin-top:15px}th{background:#e8f6fa;color:#087ea4}th,td{padding:13px 10px;text-align:right;border-bottom:1px solid #dcecef}.number{text-align:center}.total{display:flex;justify-content:space-between;background:#0d2d3a;color:#fff;margin-top:18px;padding:17px;border-radius:12px;font-size:21px;font-weight:bold}
+    .note{color:#66858f;text-align:center;margin-top:25px;font-size:13px}.actions{text-align:center;margin:20px}.print{border:0;border-radius:12px;background:#087ea4;color:#fff;padding:13px 28px;font-size:16px;cursor:pointer}
+    @media(max-width:600px){header{padding:22px}.content{padding:18px}.meta{grid-template-columns:1fr}th,td{padding:10px 5px;font-size:13px}}
+    @media print{body{background:#fff}.page{width:100%;margin:0;box-shadow:none;border-radius:0}.actions{display:none}}
+  </style>
+</head>
+<body>
+  <div class="actions"><button class="print" onclick="window.print()">طباعة أو حفظ PDF</button></div>
+  <main class="page">
+    <header><div><div class="brand">مغسلة السيارات المتنقلة</div><small>فاتورة مبدئية غير ضريبية</small></div><h1>فاتورة</h1></header>
+    <div class="content">
+      <section class="meta">
+        <div><span class="label">رقم الفاتورة</span>{{ invoice.number }}</div>
+        <div><span class="label">تاريخ الخدمة</span>{{ booking.date|date:"Y-m-d" }}</div>
+        <div><span class="label">اسم العميل</span>{{ customer_name }}</div>
+        <div><span class="label">رقم الجوال</span>{{ customer_phone }}</div>
+        <div><span class="label">طريقة الدفع</span>{{ payment_name }}</div>
+        <div><span class="label">رقم الطلب</span>#{{ booking.id }}</div>
+      </section>
+      <table>
+        <thead><tr><th>الخدمة</th><th class="number">الكمية</th><th class="number">سعر الوحدة</th><th class="number">الإجمالي</th></tr></thead>
+        <tbody>
+          {% for item in invoice.line_items %}
+          <tr><td>{{ item.name }}</td><td class="number">{{ item.quantity }}</td><td class="number">{{ item.unit_price }} ر.س</td><td class="number">{{ item.subtotal }} ر.س</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="total"><span>الإجمالي النهائي</span><span>{{ invoice.total_amount }} ر.س</span></div>
+      <p class="note">شكرًا لاختياركم خدماتنا — هذه فاتورة مبدئية غير ضريبية.</p>
+    </div>
+  </main>
+</body>
+</html>
