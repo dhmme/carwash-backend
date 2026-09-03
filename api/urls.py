@@ -18,7 +18,7 @@ from .views import (
     manager_category_detail, manager_bookings, manager_invoices,
     manager_workers, manager_worker_detail,
     manager_ledger, manager_expenses, manager_expense_detail,
-    invoice_print_view,
+    invoice_print_view, invoice_logo_view,
 )
 
 urlpatterns = [
@@ -38,6 +38,7 @@ urlpatterns = [
 
     # Bookings
     path('bookings/', booking_list_create, name='booking-list-create'),
+    path('branding/code-care-logo.png', invoice_logo_view, name='invoice-logo'),
     path('invoices/<uuid:token>/print/', invoice_print_view, name='invoice-print'),
 
     # Booked time slots for a given date
