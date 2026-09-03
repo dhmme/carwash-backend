@@ -1,5 +1,6 @@
 from django.contrib.auth.models import User
 from django.db import IntegrityError, transaction
+from django.urls import reverse
 from rest_framework import serializers
 from .models import AddOn, Service, Car, Booking, Location, VehicleCategory, Invoice, Expense
 
@@ -83,6 +84,7 @@ class BookingSerializer(serializers.ModelSerializer):
     customer = UserSerializer(read_only=True)
     service_name = serializers.CharField(source='service.name', read_only=True)
     maps_url = serializers.SerializerMethodField()
+    invoice_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Booking
@@ -92,6 +94,7 @@ class BookingSerializer(serializers.ModelSerializer):
             'latitude', 'longitude', 'maps_url', 'date', 'time_slot',
             'status', 'payment_method', 'total_price', 'created_at',
             'add_ons',
+            'invoice_url',
         ]
         read_only_fields = ['status', 'total_price', 'created_at']
 
@@ -150,7 +153,8 @@ class BookingSerializer(serializers.ModelSerializer):
                     add_ons=add_on_snapshot,
                     **validated_data,
                 )
-                Invoice.objects.create(booking=booking)
+                invoice = Invoice.objects.create(booking=booking)
+                invoice.ensure_snapshot()
                 return booking
         except IntegrityError as exc:
             raise serializers.ValidationError({
@@ -159,6 +163,13 @@ class BookingSerializer(serializers.ModelSerializer):
 
     def get_maps_url(self, obj):
         return obj.maps_url()
+
+    def get_invoice_url(self, obj):
+        invoice, _ = Invoice.objects.get_or_create(booking=obj)
+        invoice.ensure_snapshot()
+        request = self.context.get('request')
+        path = reverse('invoice-print', kwargs={'token': invoice.public_token})
+        return request.build_absolute_uri(path) if request else path
 
 
 class BookingStatusSerializer(serializers.ModelSerializer):
@@ -229,11 +240,13 @@ class InvoiceSerializer(serializers.ModelSerializer):
     total = serializers.DecimalField(source='booking.total_price', max_digits=10, decimal_places=2, read_only=True)
     payment_method = serializers.CharField(source='booking.payment_method', read_only=True)
     add_ons = serializers.JSONField(source='booking.add_ons', read_only=True)
+    line_items = serializers.JSONField(read_only=True)
 
     class Meta:
         model = Invoice
         fields = ['id', 'number', 'booking', 'issued_at', 'customer_name', 'customer_phone',
-                  'service_name', 'date', 'total', 'payment_method', 'add_ons', 'notes']
+                  'service_name', 'date', 'total', 'payment_method', 'add_ons',
+                  'line_items', 'notes']
 
     def get_customer_name(self, obj):
         b = obj.booking
