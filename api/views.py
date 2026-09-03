@@ -4,6 +4,8 @@ from django.db.models import Count, Sum
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from decimal import Decimal
+from pathlib import Path
+from django.http import FileResponse
 from django.shortcuts import get_object_or_404, render
 from rest_framework import status
 from rest_framework.authtoken.models import Token
@@ -305,6 +307,13 @@ def invoice_print_view(request, token):
         'customer_phone': booking.customer_phone or booking.customer.username,
         'payment_name': payment_names.get(booking.payment_method, booking.payment_method),
     })
+
+
+def invoice_logo_view(request):
+    logo_path = Path(__file__).resolve().parent / 'assets' / 'code-care-logo.png'
+    response = FileResponse(logo_path.open('rb'), content_type='image/png')
+    response['Cache-Control'] = 'public, max-age=86400'
+    return response
 
 
 @api_view(['GET', 'POST'])
