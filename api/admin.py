@@ -1,7 +1,10 @@
 from django.contrib import admin
 from django.utils.html import format_html
 
-from .models import AddOn, Service, Car, Booking, VehicleCategory, Invoice, Expense
+from .models import (
+    AddOn, Service, Car, Booking, VehicleCategory, Invoice, Expense,
+    PaymentTransaction,
+)
 
 
 @admin.register(Service)
@@ -30,6 +33,13 @@ class InvoiceAdmin(admin.ModelAdmin):
 class ExpenseAdmin(admin.ModelAdmin):
     list_display = ('date', 'description', 'category', 'amount', 'payment_method')
     list_filter = ('date', 'payment_method', 'category')
+
+
+@admin.register(PaymentTransaction)
+class PaymentTransactionAdmin(admin.ModelAdmin):
+    list_display = ('id', 'booking', 'provider', 'status', 'amount', 'currency', 'created_at')
+    list_filter = ('provider', 'status', 'currency')
+    readonly_fields = ('public_token', 'provider_payment_id', 'provider_response')
 
 
 @admin.register(Car)

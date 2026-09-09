@@ -91,6 +91,7 @@ class Booking(models.Model):
         ('cash', 'كاش'),
         ('card', 'شبكة'),
         ('bank_transfer', 'تحويل بنكي'),
+        ('online', 'دفع إلكتروني'),
     ]
 
     class Meta:
@@ -151,6 +152,40 @@ class Booking(models.Model):
         if self.latitude is not None and self.longitude is not None:
             return f"https://www.google.com/maps?q={self.latitude},{self.longitude}"
         return None
+
+
+class PaymentTransaction(models.Model):
+    STATUS_CHOICES = [
+        ('pending', 'بانتظار الدفع'),
+        ('paid', 'مدفوع'),
+        ('failed', 'فشل الدفع'),
+        ('expired', 'انتهت مهلة الدفع'),
+    ]
+
+    booking = models.OneToOneField(
+        Booking,
+        on_delete=models.CASCADE,
+        related_name='payment',
+    )
+    public_token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    provider = models.CharField(max_length=30, default='moyasar')
+    provider_payment_id = models.CharField(
+        max_length=100,
+        unique=True,
+        null=True,
+        blank=True,
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    currency = models.CharField(max_length=3, default='SAR')
+    expires_at = models.DateTimeField()
+    paid_at = models.DateTimeField(null=True, blank=True)
+    provider_response = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f'Payment #{self.pk} - Booking #{self.booking_id} - {self.status}'
 
 
 class Invoice(models.Model):
