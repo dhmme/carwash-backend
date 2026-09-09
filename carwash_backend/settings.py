@@ -161,3 +161,11 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated',
     ],
 }
+
+MOYASAR_PUBLISHABLE_KEY = os.environ.get('MOYASAR_PUBLISHABLE_KEY', '')
+MOYASAR_SECRET_KEY = os.environ.get('MOYASAR_SECRET_KEY', '')
+MOYASAR_API_URL = os.environ.get('MOYASAR_API_URL', 'https://api.moyasar.com/v1').rstrip('/')
+CUSTOMER_APP_URL = os.environ.get(
+    'CUSTOMER_APP_URL',
+    'https://carwash-customer-app.vercel.app',
+).rstrip('/')

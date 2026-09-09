@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} | Code Care</title>
+  <style>
+    *{box-sizing:border-box} body{margin:0;min-height:100vh;display:grid;place-items:center;background:#071d27;color:#eefaff;font-family:Tahoma,Arial,sans-serif}.card{width:min(500px,calc(100% - 28px));background:#0d2d3a;border:1px solid #1a5266;border-radius:22px;padding:32px;text-align:center;box-shadow:0 18px 45px #0007}.icon{width:76px;height:76px;border-radius:50%;display:grid;place-items:center;margin:0 auto 18px;font-size:38px;background:#164455;color:#5bd3fb}.success .icon{background:#153f35;color:#62dfaf}.error .icon{background:#4a2027;color:#ff9aa8}h1{font-size:25px;margin:0 0 12px}p{color:#b9d6df;line-height:1.8}.button{display:block;margin-top:24px;padding:14px;border-radius:12px;background:#168db7;color:#fff;text-decoration:none;font-weight:bold}
+  </style>
+</head>
+<body>
+  <main class="card {{ result }}">
+    <div class="icon">{% if result == 'success' %}✓{% elif result == 'pending' %}…{% else %}×{% endif %}</div>
+    <h1>{{ title }}</h1>
+    <p>{{ message }}</p>
+    <a class="button" href="{{ customer_app_url }}">العودة إلى تطبيق Code Care</a>
+  </main>
+</body>
+</html>

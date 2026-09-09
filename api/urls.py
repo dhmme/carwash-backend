@@ -13,12 +13,14 @@ from .views import (
     location_list_create,
     add_on_list,
     vehicle_category_list,
+    payment_config_view,
     manager_dashboard, manager_services, manager_service_detail,
     manager_add_ons, manager_add_on_detail, manager_categories,
     manager_category_detail, manager_bookings, manager_invoices,
     manager_workers, manager_worker_detail,
     manager_ledger, manager_expenses, manager_expense_detail,
     invoice_print_view, invoice_logo_view,
+    moyasar_checkout_view, moyasar_reference_view, moyasar_callback_view,
 )
 
 urlpatterns = [
@@ -31,6 +33,7 @@ urlpatterns = [
     path('services/', service_list, name='service-list'),
     path('add-ons/', add_on_list, name='add-on-list'),
     path('vehicle-categories/', vehicle_category_list, name='vehicle-category-list'),
+    path('payment-config/', payment_config_view, name='payment-config'),
 
     # Cars
     path('cars/', car_list_create, name='car-list-create'),
@@ -40,6 +43,9 @@ urlpatterns = [
     path('bookings/', booking_list_create, name='booking-list-create'),
     path('branding/code-care-logo.png', invoice_logo_view, name='invoice-logo'),
     path('invoices/<uuid:token>/print/', invoice_print_view, name='invoice-print'),
+    path('payments/<uuid:token>/checkout/', moyasar_checkout_view, name='moyasar-checkout'),
+    path('payments/<uuid:token>/reference/', moyasar_reference_view, name='moyasar-reference'),
+    path('payments/<uuid:token>/callback/', moyasar_callback_view, name='moyasar-callback'),
 
     # Booked time slots for a given date
     path('booked-slots/', booked_slots, name='booked-slots'),  

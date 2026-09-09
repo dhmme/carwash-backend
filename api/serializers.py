@@ -1,8 +1,15 @@
 from django.contrib.auth.models import User
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.urls import reverse
+from django.utils import timezone
+from datetime import timedelta
 from rest_framework import serializers
-from .models import AddOn, Service, Car, Booking, Location, VehicleCategory, Invoice, Expense
+from .models import (
+    AddOn, Service, Car, Booking, Location, VehicleCategory, Invoice, Expense,
+    PaymentTransaction,
+)
+from .payment_services import expire_stale_payments
 
 
 class ServiceSerializer(serializers.ModelSerializer):
@@ -85,6 +92,8 @@ class BookingSerializer(serializers.ModelSerializer):
     service_name = serializers.CharField(source='service.name', read_only=True)
     maps_url = serializers.SerializerMethodField()
     invoice_url = serializers.SerializerMethodField()
+    payment_status = serializers.SerializerMethodField()
+    payment_checkout_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Booking
@@ -94,13 +103,21 @@ class BookingSerializer(serializers.ModelSerializer):
             'latitude', 'longitude', 'maps_url', 'date', 'time_slot',
             'status', 'payment_method', 'total_price', 'created_at',
             'add_ons',
-            'invoice_url',
+            'invoice_url', 'payment_status', 'payment_checkout_url',
         ]
         read_only_fields = ['status', 'total_price', 'created_at']
 
     def validate(self, attrs):
+        expire_stale_payments()
         date = attrs.get('date')
         time_slot = attrs.get('time_slot')
+
+        if attrs.get('payment_method') == 'online' and not (
+            settings.MOYASAR_PUBLISHABLE_KEY and settings.MOYASAR_SECRET_KEY
+        ):
+            raise serializers.ValidationError({
+                'payment_method': 'الدفع الإلكتروني غير مفعّل حاليًا.'
+            })
 
         if Booking.objects.filter(date=date, time_slot=time_slot).exclude(
             status='canceled'
@@ -146,15 +163,23 @@ class BookingSerializer(serializers.ModelSerializer):
 
         try:
             with transaction.atomic():
+                is_online = validated_data.get('payment_method') == 'online'
                 booking = Booking.objects.create(
                     customer=request.user,
-                    status='accepted',
+                    status='pending' if is_online else 'accepted',
                     total_price=total_price,
                     add_ons=add_on_snapshot,
                     **validated_data,
                 )
-                invoice = Invoice.objects.create(booking=booking)
-                invoice.ensure_snapshot()
+                if is_online:
+                    PaymentTransaction.objects.create(
+                        booking=booking,
+                        amount=total_price,
+                        expires_at=timezone.now() + timedelta(minutes=15),
+                    )
+                else:
+                    invoice = Invoice.objects.create(booking=booking)
+                    invoice.ensure_snapshot()
                 return booking
         except IntegrityError as exc:
             raise serializers.ValidationError({
@@ -165,10 +190,30 @@ class BookingSerializer(serializers.ModelSerializer):
         return obj.maps_url()
 
     def get_invoice_url(self, obj):
+        if obj.payment_method == 'online':
+            payment = getattr(obj, 'payment', None)
+            if not payment or payment.status != 'paid':
+                return ''
         invoice, _ = Invoice.objects.get_or_create(booking=obj)
         invoice.ensure_snapshot()
         request = self.context.get('request')
         path = reverse('invoice-print', kwargs={'token': invoice.public_token})
+        return request.build_absolute_uri(path) if request else path
+
+    def get_payment_status(self, obj):
+        if obj.payment_method != 'online':
+            return 'pay_on_service'
+        payment = getattr(obj, 'payment', None)
+        return payment.status if payment else 'pending'
+
+    def get_payment_checkout_url(self, obj):
+        if obj.payment_method != 'online':
+            return ''
+        payment = getattr(obj, 'payment', None)
+        if not payment or payment.status != 'pending':
+            return ''
+        request = self.context.get('request')
+        path = reverse('moyasar-checkout', kwargs={'token': payment.public_token})
         return request.build_absolute_uri(path) if request else path
 
 
@@ -187,6 +232,7 @@ class WorkerBookingSerializer(serializers.ModelSerializer):
     plate_number = serializers.CharField(source='car.plate_number', read_only=True)
     service_name = serializers.CharField(source='service.name', read_only=True)
     maps_url = serializers.SerializerMethodField()
+    payment_status = serializers.SerializerMethodField()
 
     class Meta:
         model = Booking
@@ -209,6 +255,7 @@ class WorkerBookingSerializer(serializers.ModelSerializer):
             'maps_url',
             'total_price',
             'payment_method',
+            'payment_status',
             'add_ons',
         ]
 
@@ -222,6 +269,12 @@ class WorkerBookingSerializer(serializers.ModelSerializer):
         if obj.latitude is not None and obj.longitude is not None:
             return f"https://www.google.com/maps?q={obj.latitude},{obj.longitude}"
         return None
+
+    def get_payment_status(self, obj):
+        if obj.payment_method != 'online':
+            return 'pay_on_service'
+        payment = getattr(obj, 'payment', None)
+        return payment.status if payment else 'pending'
 
 
 class ManagerBookingSerializer(WorkerBookingSerializer):
