@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 from urllib.parse import urlparse
@@ -43,7 +43,7 @@ class AuthAndBookingTests(APITestCase):
             'customer_phone': '0550000000',
             'car_size': 'small',
             'address_text': 'الرياض',
-            'date': date.today().isoformat(),
+            'date': (timezone.localdate() + timedelta(days=1)).isoformat(),
             'time_slot': time_slot,
             'payment_method': 'cash',
         }
@@ -149,6 +149,39 @@ class AuthAndBookingTests(APITestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn('time_slot', response.data)
+
+    @patch('api.serializers.timezone.localtime')
+    def test_booking_rejects_a_time_that_already_passed_today(self, localtime):
+        current_date = date(2026, 9, 12)
+        localtime.return_value = timezone.make_aware(
+            datetime.combine(current_date, time(hour=10, minute=1)),
+            timezone.get_current_timezone(),
+        )
+        self.authenticate()
+        payload = self.booking_payload('10 صباحاً')
+        payload['date'] = current_date.isoformat()
+
+        response = self.client.post('/api/bookings/', payload)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('time_slot', response.data)
+
+    @patch('api.serializers.timezone.localtime')
+    def test_booked_slots_marks_past_times_unavailable(self, localtime):
+        current_date = date(2026, 9, 12)
+        localtime.return_value = timezone.make_aware(
+            datetime.combine(current_date, time(hour=10, minute=1)),
+            timezone.get_current_timezone(),
+        )
+
+        response = self.client.get(
+            f'/api/booked-slots/?date={current_date.isoformat()}'
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('9 صباحاً', response.data['unavailable'])
+        self.assertIn('10 صباحاً', response.data['unavailable'])
+        self.assertNotIn('11 صباحاً', response.data['unavailable'])
 
     def test_worker_endpoint_requires_staff(self):
         self.authenticate()
