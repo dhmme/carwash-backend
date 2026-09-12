@@ -3,7 +3,7 @@ from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.urls import reverse
 from django.utils import timezone
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from rest_framework import serializers
 from .models import (
     AddOn, Service, Car, Booking, Location, VehicleCategory, Invoice, Expense,
@@ -18,6 +18,48 @@ BOOKING_TIME_SLOTS = {
     '4 مساءً', '5 مساءً', '6 مساءً', '7 مساءً', '8 مساءً',
     '9 مساءً', '10 مساءً', '11 مساءً', '12 مساءً',
 }
+BOOKING_SLOT_HOURS = {
+    '9 صباحاً': 9,
+    '10 صباحاً': 10,
+    '11 صباحاً': 11,
+    '4 مساءً': 16,
+    '5 مساءً': 17,
+    '6 مساءً': 18,
+    '7 مساءً': 19,
+    '8 مساءً': 20,
+    '9 مساءً': 21,
+    '10 مساءً': 22,
+    '11 مساءً': 23,
+    # Midnight at the end of the selected service day.
+    '12 مساءً': 24,
+}
+
+
+def booking_slot_datetime(booking_date, time_slot):
+    hour = BOOKING_SLOT_HOURS.get(time_slot)
+    if hour is None:
+        return None
+    if hour == 24:
+        booking_date += timedelta(days=1)
+        hour = 0
+    naive_value = datetime.combine(booking_date, time(hour=hour))
+    return timezone.make_aware(naive_value, timezone.get_current_timezone())
+
+
+def is_booking_slot_past(booking_date, time_slot, now=None):
+    slot_value = booking_slot_datetime(booking_date, time_slot)
+    if slot_value is None:
+        return False
+    current_value = now or timezone.localtime()
+    return slot_value <= current_value
+
+
+def past_booking_slots(booking_date, now=None):
+    current_value = now or timezone.localtime()
+    return [
+        slot for slot in BOOKING_TIME_SLOTS
+        if is_booking_slot_past(booking_date, slot, current_value)
+    ]
 
 
 class ServiceSerializer(serializers.ModelSerializer):
@@ -131,7 +173,8 @@ class BookingSerializer(serializers.ModelSerializer):
         time_slot = attrs.get('time_slot')
         request = self.context['request']
 
-        today = timezone.localdate()
+        now = timezone.localtime()
+        today = now.date()
         if booking_date < today:
             raise serializers.ValidationError({
                 'date': 'لا يمكن الحجز في تاريخ سابق.'
@@ -143,6 +186,10 @@ class BookingSerializer(serializers.ModelSerializer):
         if time_slot not in BOOKING_TIME_SLOTS:
             raise serializers.ValidationError({
                 'time_slot': 'وقت الحجز غير متاح.'
+            })
+        if is_booking_slot_past(booking_date, time_slot, now):
+            raise serializers.ValidationError({
+                'time_slot': 'هذا الوقت انتهى، اختر وقتاً قادماً.'
             })
 
         car = attrs.get('car')
