@@ -11,7 +11,8 @@ from rest_framework.authtoken.models import Token
 from rest_framework.test import APITestCase
 
 from .models import (
-    AddOn, Booking, Car, Expense, Invoice, PaymentTransaction, Service,
+    AddOn, Booking, BookingTimeSlot, Car, Expense, Invoice,
+    PaymentTransaction, Service,
 )
 
 
@@ -31,6 +32,15 @@ class AuthAndBookingTests(APITestCase):
             username='0550000001',
             password='password123',
         )
+        for label, start_time in [
+            ('9 صباحاً', time(9, 0)),
+            ('10 صباحاً', time(10, 0)),
+            ('11 صباحاً', time(11, 0)),
+        ]:
+            BookingTimeSlot.objects.get_or_create(
+                label=label,
+                defaults={'start_time': start_time},
+            )
 
     def authenticate(self, user=None):
         token, _ = Token.objects.get_or_create(user=user or self.user)
@@ -150,6 +160,15 @@ class AuthAndBookingTests(APITestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn('time_slot', response.data)
 
+    def test_booking_rejects_inactive_time_slot(self):
+        BookingTimeSlot.objects.filter(label='9 صباحاً').update(is_active=False)
+        self.authenticate()
+
+        response = self.client.post('/api/bookings/', self.booking_payload())
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('time_slot', response.data)
+
     @patch('api.serializers.timezone.localtime')
     def test_booking_rejects_a_time_that_already_passed_today(self, localtime):
         current_date = date(2026, 9, 12)
@@ -252,6 +271,54 @@ class AuthAndBookingTests(APITestCase):
             'name': 'غسيل تجريبي', 'description': '', 'price': '60.00', 'is_active': True,
         })
         self.assertEqual(response.status_code, 201)
+
+    def test_manager_can_create_edit_and_delete_time_slots(self):
+        manager = User.objects.create_superuser(
+            username='0550000076', password='password123'
+        )
+        self.authenticate(manager)
+        response = self.client.post('/api/manager/time-slots/', {
+            'label': '2 مساءً',
+            'start_time': '14:00:00',
+            'day_offset': 0,
+            'is_active': True,
+        })
+        self.assertEqual(response.status_code, 201)
+        slot_id = response.data['id']
+
+        response = self.client.patch(
+            f'/api/manager/time-slots/{slot_id}/',
+            {'label': '2:30 مساءً', 'start_time': '14:30:00'},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['label'], '2:30 مساءً')
+
+        response = self.client.delete(f'/api/manager/time-slots/{slot_id}/')
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(BookingTimeSlot.objects.filter(pk=slot_id).exists())
+
+    def test_manager_cannot_change_or_delete_slot_with_future_booking(self):
+        manager = User.objects.create_superuser(
+            username='0550000075', password='password123'
+        )
+        slot = BookingTimeSlot.objects.get(label='9 صباحاً')
+        Booking.objects.create(
+            customer=self.user,
+            service=self.service,
+            date=timezone.localdate() + timedelta(days=1),
+            time_slot=slot.label,
+            total_price=35,
+            status='accepted',
+        )
+        self.authenticate(manager)
+
+        response = self.client.patch(
+            f'/api/manager/time-slots/{slot.id}/',
+            {'start_time': '09:30:00'},
+        )
+        self.assertEqual(response.status_code, 400)
+        response = self.client.delete(f'/api/manager/time-slots/{slot.id}/')
+        self.assertEqual(response.status_code, 400)
 
     def test_manager_ledger_calculates_cash_and_expenses(self):
         manager = User.objects.create_superuser(

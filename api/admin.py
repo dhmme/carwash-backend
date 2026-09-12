@@ -3,7 +3,7 @@ from django.utils.html import format_html
 
 from .models import (
     AddOn, Service, Car, Booking, VehicleCategory, Invoice, Expense,
-    PaymentTransaction,
+    PaymentTransaction, BookingTimeSlot,
 )
 
 
@@ -22,6 +22,12 @@ class AddOnAdmin(admin.ModelAdmin):
 class VehicleCategoryAdmin(admin.ModelAdmin):
     list_display = ('key', 'name', 'price_adjustment', 'is_active')
     list_editable = ('price_adjustment', 'is_active')
+
+
+@admin.register(BookingTimeSlot)
+class BookingTimeSlotAdmin(admin.ModelAdmin):
+    list_display = ('label', 'start_time', 'day_offset', 'is_active')
+    list_editable = ('is_active',)
 
 
 @admin.register(Invoice)

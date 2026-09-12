@@ -17,7 +17,7 @@ from rest_framework.response import Response
 
 from .models import (
     AddOn, Booking, Car, Location, Service, VehicleCategory, Invoice, Expense,
-    PaymentTransaction,
+    PaymentTransaction, BookingTimeSlot,
 )
 from .payment_services import (
     PaymentVerificationError,
@@ -43,6 +43,7 @@ from .serializers import (
     ManagerStaffSerializer,
     ExpenseSerializer,
     past_booking_slots,
+    BookingTimeSlotSerializer,
 )
 
 
@@ -111,6 +112,13 @@ def add_on_list(request):
 def vehicle_category_list(request):
     categories = VehicleCategory.objects.filter(is_active=True).order_by('id')
     return Response(VehicleCategorySerializer(categories, many=True).data)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def booking_time_slot_list(request):
+    slots = BookingTimeSlot.objects.filter(is_active=True)
+    return Response(BookingTimeSlotSerializer(slots, many=True).data)
 
 
 @api_view(['GET'])
@@ -314,6 +322,47 @@ def manager_categories(request):
 @permission_classes([IsManager])
 def manager_category_detail(request, item_id):
     return _catalog_detail(request, VehicleCategory, VehicleCategorySerializer, item_id)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsManager])
+def manager_time_slots(request):
+    if request.method == 'GET':
+        slots = BookingTimeSlot.objects.all()
+        return Response(BookingTimeSlotSerializer(slots, many=True).data)
+
+    serializer = BookingTimeSlotSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['PATCH', 'DELETE'])
+@permission_classes([IsManager])
+def manager_time_slot_detail(request, item_id):
+    try:
+        item = BookingTimeSlot.objects.get(pk=item_id)
+    except BookingTimeSlot.DoesNotExist:
+        return Response(
+            {'detail': 'الوقت غير موجود.'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    if request.method == 'DELETE':
+        has_future_bookings = Booking.objects.filter(
+            date__gte=timezone.localdate(),
+            time_slot=item.label,
+        ).exclude(status='canceled').exists()
+        if has_future_bookings:
+            return Response(
+                {'detail': 'لا يمكن حذف وقت عليه حجوزات حالية أو مستقبلية.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        item.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+    serializer = BookingTimeSlotSerializer(item, data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data)
 
 
 @api_view(['GET'])

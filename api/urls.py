@@ -13,12 +13,14 @@ from .views import (
     location_list_create,
     add_on_list,
     vehicle_category_list,
+    booking_time_slot_list,
     payment_config_view,
     manager_dashboard, manager_services, manager_service_detail,
     manager_add_ons, manager_add_on_detail, manager_categories,
     manager_category_detail, manager_bookings, manager_invoices,
     manager_workers, manager_worker_detail,
     manager_ledger, manager_expenses, manager_expense_detail,
+    manager_time_slots, manager_time_slot_detail,
     invoice_print_view, invoice_logo_view,
     moyasar_checkout_view, moyasar_reference_view, moyasar_callback_view,
 )
@@ -33,6 +35,7 @@ urlpatterns = [
     path('services/', service_list, name='service-list'),
     path('add-ons/', add_on_list, name='add-on-list'),
     path('vehicle-categories/', vehicle_category_list, name='vehicle-category-list'),
+    path('booking-time-slots/', booking_time_slot_list, name='booking-time-slot-list'),
     path('payment-config/', payment_config_view, name='payment-config'),
 
     # Cars
@@ -62,6 +65,8 @@ urlpatterns = [
     path('manager/add-ons/<int:item_id>/', manager_add_on_detail),
     path('manager/categories/', manager_categories),
     path('manager/categories/<int:item_id>/', manager_category_detail),
+    path('manager/time-slots/', manager_time_slots),
+    path('manager/time-slots/<int:item_id>/', manager_time_slot_detail),
     path('manager/bookings/', manager_bookings),
     path('manager/invoices/', manager_invoices),
     path('manager/workers/', manager_workers),
