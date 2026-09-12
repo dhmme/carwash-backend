@@ -42,6 +42,7 @@ from .serializers import (
     InvoiceSerializer,
     ManagerStaffSerializer,
     ExpenseSerializer,
+    past_booking_slots,
 )
 
 
@@ -182,10 +183,19 @@ def booked_slots(request):
             {'error': 'date query parameter is required'},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    slots = Booking.objects.filter(date=date).exclude(
+    booking_date = parse_date(date)
+    if booking_date is None:
+        return Response(
+            {'error': 'date query parameter is invalid'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    slots = Booking.objects.filter(date=booking_date).exclude(
         status='canceled'
     ).values_list('time_slot', flat=True)
-    return Response({'booked': list(slots)})
+    return Response({
+        'booked': list(slots),
+        'unavailable': past_booking_slots(booking_date),
+    })
 
 
 @api_view(['GET'])
