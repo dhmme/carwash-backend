@@ -34,6 +34,28 @@ class VehicleCategory(models.Model):
         return self.name
 
 
+class BookingTimeSlot(models.Model):
+    label = models.CharField(max_length=50, unique=True)
+    start_time = models.TimeField()
+    day_offset = models.PositiveSmallIntegerField(
+        default=0,
+        choices=[(0, 'نفس اليوم'), (1, 'نهاية اليوم بعد منتصف الليل')],
+    )
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['day_offset', 'start_time', 'id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['start_time', 'day_offset'],
+                name='unique_booking_slot_clock_time',
+            ),
+        ]
+
+    def __str__(self):
+        return self.label
+
+
 class Car(models.Model):
     SIZE_CHOICES = [('small', 'صغيرة'), ('big', 'كبيرة')]
     CATEGORY_CHOICES = [

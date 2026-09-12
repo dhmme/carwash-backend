@@ -3,46 +3,22 @@ from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.urls import reverse
 from django.utils import timezone
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from rest_framework import serializers
 from .models import (
     AddOn, Service, Car, Booking, Location, VehicleCategory, Invoice, Expense,
-    PaymentTransaction,
+    PaymentTransaction, BookingTimeSlot,
 )
 from .payment_services import expire_stale_payments, moyasar_mode
 
 
 BOOKING_WINDOW_DAYS = 3
-BOOKING_TIME_SLOTS = {
-    '9 صباحاً', '10 صباحاً', '11 صباحاً',
-    '4 مساءً', '5 مساءً', '6 مساءً', '7 مساءً', '8 مساءً',
-    '9 مساءً', '10 مساءً', '11 مساءً', '12 مساءً',
-}
-BOOKING_SLOT_HOURS = {
-    '9 صباحاً': 9,
-    '10 صباحاً': 10,
-    '11 صباحاً': 11,
-    '4 مساءً': 16,
-    '5 مساءً': 17,
-    '6 مساءً': 18,
-    '7 مساءً': 19,
-    '8 مساءً': 20,
-    '9 مساءً': 21,
-    '10 مساءً': 22,
-    '11 مساءً': 23,
-    # Midnight at the end of the selected service day.
-    '12 مساءً': 24,
-}
-
-
 def booking_slot_datetime(booking_date, time_slot):
-    hour = BOOKING_SLOT_HOURS.get(time_slot)
-    if hour is None:
+    slot = BookingTimeSlot.objects.filter(label=time_slot, is_active=True).first()
+    if slot is None:
         return None
-    if hour == 24:
-        booking_date += timedelta(days=1)
-        hour = 0
-    naive_value = datetime.combine(booking_date, time(hour=hour))
+    booking_date += timedelta(days=slot.day_offset)
+    naive_value = datetime.combine(booking_date, slot.start_time)
     return timezone.make_aware(naive_value, timezone.get_current_timezone())
 
 
@@ -57,8 +33,8 @@ def is_booking_slot_past(booking_date, time_slot, now=None):
 def past_booking_slots(booking_date, now=None):
     current_value = now or timezone.localtime()
     return [
-        slot for slot in BOOKING_TIME_SLOTS
-        if is_booking_slot_past(booking_date, slot, current_value)
+        slot.label for slot in BookingTimeSlot.objects.filter(is_active=True)
+        if is_booking_slot_past(booking_date, slot.label, current_value)
     ]
 
 
@@ -78,6 +54,35 @@ class VehicleCategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = VehicleCategory
         fields = ['id', 'key', 'name', 'price_adjustment', 'is_active']
+
+
+class BookingTimeSlotSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BookingTimeSlot
+        fields = ['id', 'label', 'start_time', 'day_offset', 'is_active']
+
+    def validate_label(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError('اكتب اسم الوقت.')
+        return value
+
+    def validate(self, attrs):
+        instance = self.instance
+        if instance:
+            protected_fields = ('label', 'start_time', 'day_offset')
+            changed = any(
+                field in attrs and attrs[field] != getattr(instance, field)
+                for field in protected_fields
+            )
+            if changed and Booking.objects.filter(
+                date__gte=timezone.localdate(),
+                time_slot=instance.label,
+            ).exclude(status='canceled').exists():
+                raise serializers.ValidationError({
+                    'detail': 'لا يمكن تغيير وقت عليه حجوزات حالية أو مستقبلية.'
+                })
+        return attrs
 
 
 class CarSerializer(serializers.ModelSerializer):
@@ -183,7 +188,10 @@ class BookingSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 'date': 'الحجز متاح لليوم الحالي والثلاثة أيام القادمة فقط.'
             })
-        if time_slot not in BOOKING_TIME_SLOTS:
+        if not BookingTimeSlot.objects.filter(
+            label=time_slot,
+            is_active=True,
+        ).exists():
             raise serializers.ValidationError({
                 'time_slot': 'وقت الحجز غير متاح.'
             })
