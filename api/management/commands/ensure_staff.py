@@ -19,9 +19,12 @@ class Command(BaseCommand):
         user, created = User.objects.get_or_create(username=phone)
         user.first_name = name
         user.is_staff = True
+        user.is_superuser = False
         user.is_active = True
         user.set_password(password)
-        user.save(update_fields=['first_name', 'is_staff', 'is_active', 'password'])
+        user.save(update_fields=[
+            'first_name', 'is_staff', 'is_superuser', 'is_active', 'password',
+        ])
 
         action = 'created' if created else 'updated'
         self.stdout.write(self.style.SUCCESS(f'Worker account {action}.'))

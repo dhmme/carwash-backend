@@ -40,11 +40,14 @@
           const referenceUrl = JSON.parse(document.getElementById('moyasar-reference-url').textContent);
           paymentConfig.element = '.mysr-form';
           paymentConfig.on_completed = async function(payment) {
-            await fetch(referenceUrl, {
+            const response = await fetch(referenceUrl, {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
               body: JSON.stringify({id: payment.id})
             });
+            if (!response.ok) {
+              throw new Error('تعذر حفظ مرجع عملية الدفع.');
+            }
           };
           Moyasar.init(paymentConfig);
         </script>
