@@ -9,7 +9,15 @@ from .models import (
     AddOn, Service, Car, Booking, Location, VehicleCategory, Invoice, Expense,
     PaymentTransaction,
 )
-from .payment_services import expire_stale_payments
+from .payment_services import expire_stale_payments, moyasar_mode
+
+
+BOOKING_WINDOW_DAYS = 3
+BOOKING_TIME_SLOTS = {
+    '9 صباحاً', '10 صباحاً', '11 صباحاً',
+    '4 مساءً', '5 مساءً', '6 مساءً', '7 مساءً', '8 مساءً',
+    '9 مساءً', '10 مساءً', '11 مساءً', '12 مساءً',
+}
 
 
 class ServiceSerializer(serializers.ModelSerializer):
@@ -67,6 +75,16 @@ class LocationSerializer(serializers.ModelSerializer):
         model = Location
         fields = ['id', 'name', 'address_text', 'latitude', 'longitude']
 
+    def validate_latitude(self, value):
+        if not -90 <= value <= 90:
+            raise serializers.ValidationError('خط العرض غير صالح.')
+        return value
+
+    def validate_longitude(self, value):
+        if not -180 <= value <= 180:
+            raise serializers.ValidationError('خط الطول غير صالح.')
+        return value
+
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
@@ -109,17 +127,42 @@ class BookingSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         expire_stale_payments()
-        date = attrs.get('date')
+        booking_date = attrs.get('date')
         time_slot = attrs.get('time_slot')
+        request = self.context['request']
 
-        if attrs.get('payment_method') == 'online' and not (
-            settings.MOYASAR_PUBLISHABLE_KEY and settings.MOYASAR_SECRET_KEY
-        ):
+        today = timezone.localdate()
+        if booking_date < today:
+            raise serializers.ValidationError({
+                'date': 'لا يمكن الحجز في تاريخ سابق.'
+            })
+        if booking_date > today + timedelta(days=BOOKING_WINDOW_DAYS):
+            raise serializers.ValidationError({
+                'date': 'الحجز متاح لليوم الحالي والثلاثة أيام القادمة فقط.'
+            })
+        if time_slot not in BOOKING_TIME_SLOTS:
+            raise serializers.ValidationError({
+                'time_slot': 'وقت الحجز غير متاح.'
+            })
+
+        car = attrs.get('car')
+        if car and car.user_id != request.user.id:
+            raise serializers.ValidationError({
+                'car': 'المركبة المختارة لا تخص هذا الحساب.'
+            })
+
+        service = attrs.get('service')
+        if not service.is_active:
+            raise serializers.ValidationError({
+                'service': 'الخدمة المختارة غير متاحة حاليًا.'
+            })
+
+        if attrs.get('payment_method') == 'online' and moyasar_mode() == 'disabled':
             raise serializers.ValidationError({
                 'payment_method': 'الدفع الإلكتروني غير مفعّل حاليًا.'
             })
 
-        if Booking.objects.filter(date=date, time_slot=time_slot).exclude(
+        if Booking.objects.filter(date=booking_date, time_slot=time_slot).exclude(
             status='canceled'
         ).exists():
             raise serializers.ValidationError({
@@ -143,12 +186,22 @@ class BookingSerializer(serializers.ModelSerializer):
             total_price += 10
 
         add_on_snapshot = []
+        seen_add_on_ids = set()
         for item in requested_add_ons:
+            if not isinstance(item, dict):
+                continue
+            add_on_id = item.get('id')
+            if add_on_id in seen_add_on_ids:
+                continue
             try:
-                add_on = AddOn.objects.get(pk=item.get('id'), is_active=True)
+                add_on = AddOn.objects.get(pk=add_on_id, is_active=True)
             except (AddOn.DoesNotExist, TypeError, ValueError):
                 continue
-            quantity = int(item.get('quantity', 1)) if add_on.allows_quantity else 1
+            seen_add_on_ids.add(add_on_id)
+            try:
+                quantity = int(item.get('quantity', 1)) if add_on.allows_quantity else 1
+            except (TypeError, ValueError):
+                quantity = 1
             quantity = max(1, min(quantity, 20))
             subtotal = add_on.price * quantity
             total_price += subtotal

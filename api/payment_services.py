@@ -16,6 +16,16 @@ class PaymentVerificationError(Exception):
     pass
 
 
+def moyasar_mode():
+    publishable_key = settings.MOYASAR_PUBLISHABLE_KEY
+    secret_key = settings.MOYASAR_SECRET_KEY
+    if publishable_key.startswith('pk_test_') and secret_key.startswith('sk_test_'):
+        return 'test'
+    if publishable_key.startswith('pk_live_') and secret_key.startswith('sk_live_'):
+        return 'live'
+    return 'disabled'
+
+
 def expire_stale_payments():
     expired_ids = list(
         PaymentTransaction.objects.filter(
@@ -77,6 +87,44 @@ def fetch_moyasar_payment(payment_id):
         raise PaymentVerificationError('رفضت ميسر التحقق من العملية.') from exc
     except (URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise PaymentVerificationError('تعذر الاتصال بميسر للتحقق من الدفع.') from exc
+
+
+def record_moyasar_reference(transaction_token, payment_id):
+    try:
+        clean_payment_id = str(uuid.UUID(str(payment_id)))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise PaymentVerificationError('رقم عملية الدفع غير صالح.') from exc
+
+    payload = fetch_moyasar_payment(clean_payment_id)
+    try:
+        provider_payload_id = str(uuid.UUID(str(payload.get('id'))))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise PaymentVerificationError('استجابة ميسر لا تحتوي رقم عملية صالحًا.') from exc
+
+    with db_transaction.atomic():
+        payment = PaymentTransaction.objects.select_for_update().select_related(
+            'booking'
+        ).get(public_token=transaction_token)
+        metadata = payload.get('metadata') or {}
+        expected_amount = int(payment.amount * Decimal('100'))
+        if provider_payload_id != clean_payment_id:
+            raise PaymentVerificationError('رقم العملية في استجابة ميسر غير مطابق.')
+        if payload.get('amount') != expected_amount or payload.get('currency') != payment.currency:
+            raise PaymentVerificationError('قيمة أو عملة عملية الدفع غير مطابقة للطلب.')
+        if str(metadata.get('booking_id', '')) != str(payment.booking_id):
+            raise PaymentVerificationError('عملية الدفع لا تخص هذا الطلب.')
+        if payment.provider_payment_id and payment.provider_payment_id != clean_payment_id:
+            raise PaymentVerificationError('رقم العملية لا يطابق محاولة الدفع الحالية.')
+
+        payment.provider_payment_id = clean_payment_id
+        payment.provider_response = _safe_provider_response(payload)
+        try:
+            payment.save(update_fields=[
+                'provider_payment_id', 'provider_response', 'updated_at',
+            ])
+        except IntegrityError as exc:
+            raise PaymentVerificationError('عملية الدفع مرتبطة بطلب آخر.') from exc
+        return payment
 
 
 def verify_moyasar_transaction(transaction_token, payment_id):

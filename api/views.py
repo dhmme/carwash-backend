@@ -22,6 +22,8 @@ from .models import (
 from .payment_services import (
     PaymentVerificationError,
     expire_stale_payments,
+    moyasar_mode,
+    record_moyasar_reference,
     verify_moyasar_transaction,
 )
 from .permissions import IsManager
@@ -113,15 +115,10 @@ def vehicle_category_list(request):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def payment_config_view(request):
-    publishable_key = settings.MOYASAR_PUBLISHABLE_KEY
-    online_enabled = bool(publishable_key and settings.MOYASAR_SECRET_KEY)
+    mode = moyasar_mode()
     return Response({
-        'online_enabled': online_enabled,
-        'mode': (
-            'test' if publishable_key.startswith('pk_test_')
-            else 'live' if online_enabled
-            else 'disabled'
-        ),
+        'online_enabled': mode != 'disabled',
+        'mode': mode,
     })
 
 
@@ -210,6 +207,17 @@ def update_booking_status(request, booking_id):
         return Response(
             {'detail': 'الطلب غير موجود.'},
             status=status.HTTP_404_NOT_FOUND,
+        )
+    requested_status = request.data.get('status')
+    if not request.user.is_superuser and requested_status != 'completed':
+        return Response(
+            {'status': ['العامل يستطيع فقط إنهاء طلب الغسيل.']},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if booking.status in ['completed', 'canceled']:
+        return Response(
+            {'status': ['لا يمكن تعديل طلب منتهٍ أو ملغي.']},
+            status=status.HTTP_400_BAD_REQUEST,
         )
     serializer = BookingStatusSerializer(
         booking,
@@ -385,7 +393,7 @@ def moyasar_checkout_view(request, token):
         'booking': booking,
         'payment_config': payment_config,
         'reference_url': reference_url,
-        'configured': bool(publishable_key and settings.MOYASAR_SECRET_KEY),
+        'configured': moyasar_mode() != 'disabled',
         'customer_app_url': settings.CUSTOMER_APP_URL,
     })
 
@@ -393,18 +401,16 @@ def moyasar_checkout_view(request, token):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def moyasar_reference_view(request, token):
-    payment = get_object_or_404(PaymentTransaction, public_token=token)
-    payment_id = str(request.data.get('id', '')).strip()
     try:
-        import uuid
-        payment_id = str(uuid.UUID(payment_id))
-    except (ValueError, TypeError, AttributeError):
-        return Response({'detail': 'رقم العملية غير صالح.'}, status=status.HTTP_400_BAD_REQUEST)
-    if payment.provider_payment_id and payment.provider_payment_id != payment_id:
-        return Response({'detail': 'العملية لا تطابق الطلب.'}, status=status.HTTP_409_CONFLICT)
-    payment.provider_payment_id = payment_id
-    payment.save(update_fields=['provider_payment_id', 'updated_at'])
-    return Response({'saved': True})
+        payment = record_moyasar_reference(token, request.data.get('id', ''))
+    except PaymentTransaction.DoesNotExist:
+        return Response(
+            {'detail': 'عملية الدفع غير موجودة.'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    except PaymentVerificationError as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    return Response({'saved': True, 'status': payment.status})
 
 
 def moyasar_callback_view(request, token):
