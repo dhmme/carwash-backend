@@ -260,3 +260,18 @@ class Expense(models.Model):
 
     def __str__(self):
         return f'{self.description} - {self.amount}'
+
+
+class AuditLog(models.Model):
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    method = models.CharField(max_length=10)
+    path = models.CharField(max_length=255)
+    status_code = models.PositiveSmallIntegerField()
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.user_id or "anonymous"} {self.method} {self.path}'

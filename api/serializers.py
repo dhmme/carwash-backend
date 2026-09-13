@@ -1,4 +1,5 @@
 from django.contrib.auth.models import User
+from django.contrib.auth.password_validation import validate_password
 from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.urls import reverse
@@ -146,6 +147,16 @@ class RegisterSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ['username', 'name', 'email', 'password']
+
+    def validate_username(self, value):
+        value = value.strip()
+        if len(value) != 10 or not value.startswith('05') or not value.isdigit():
+            raise serializers.ValidationError('أدخل رقم جوال سعودي صحيح يبدأ بـ 05.')
+        return value
+
+    def validate_password(self, value):
+        validate_password(value)
+        return value
 
     def create(self, validated_data):
         name = validated_data.pop('name')

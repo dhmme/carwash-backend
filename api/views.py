@@ -10,10 +10,10 @@ from decimal import Decimal
 from pathlib import Path
 from django.shortcuts import get_object_or_404, render
 from rest_framework import status
-from rest_framework.authtoken.models import Token
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework_simplejwt.tokens import RefreshToken, TokenError
 
 from .models import (
     AddOn, Booking, Car, Location, Service, VehicleCategory, Invoice, Expense,
@@ -27,6 +27,7 @@ from .payment_services import (
     verify_moyasar_transaction,
 )
 from .permissions import IsManager
+from .throttles import LoginRateThrottle, RegisterRateThrottle
 from .serializers import (
     BookingSerializer,
     AddOnSerializer,
@@ -55,19 +56,27 @@ def hello_view(request):
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@throttle_classes([RegisterRateThrottle])
 def register_view(request):
     serializer = RegisterSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     user = serializer.save()
-    token, _ = Token.objects.get_or_create(user=user)
+    refresh = RefreshToken.for_user(user)
     return Response(
-        {'token': token.key, 'user': UserSerializer(user).data},
+        {
+            'access': str(refresh.access_token),
+            'refresh': str(refresh),
+            'user': UserSerializer(user).data,
+            'is_staff': user.is_staff,
+            'is_superuser': user.is_superuser,
+        },
         status=status.HTTP_201_CREATED,
     )
 
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@throttle_classes([LoginRateThrottle])
 def login_view(request):
     username = request.data.get('username', '').strip()
     password = request.data.get('password', '')
@@ -77,9 +86,10 @@ def login_view(request):
             {'detail': 'رقم الجوال أو كلمة المرور غير صحيحة.'},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    token, _ = Token.objects.get_or_create(user=user)
+    refresh = RefreshToken.for_user(user)
     return Response({
-        'token': token.key,
+        'access': str(refresh.access_token),
+        'refresh': str(refresh),
         'user': UserSerializer(user).data,
         'is_staff': user.is_staff,
         'is_superuser': user.is_superuser,
@@ -89,7 +99,12 @@ def login_view(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def logout_view(request):
-    Token.objects.filter(user=request.user).delete()
+    refresh_value = request.data.get('refresh', '')
+    if refresh_value:
+        try:
+            RefreshToken(refresh_value).blacklist()
+        except TokenError:
+            pass
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 
