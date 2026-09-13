@@ -3,8 +3,22 @@ from django.utils.html import format_html
 
 from .models import (
     AddOn, Service, Car, Booking, VehicleCategory, Invoice, Expense,
-    PaymentTransaction, BookingTimeSlot,
+    PaymentTransaction, BookingTimeSlot, AuditLog,
 )
+
+
+@admin.register(AuditLog)
+class AuditLogAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'user', 'method', 'path', 'status_code', 'ip_address')
+    list_filter = ('method', 'status_code', 'created_at')
+    search_fields = ('user__username', 'path', 'ip_address')
+    readonly_fields = ('user', 'method', 'path', 'status_code', 'ip_address', 'created_at')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(Service)

@@ -5,13 +5,14 @@ from urllib.parse import urlparse
 import uuid
 
 from django.test import override_settings
+from django.core.cache import cache
 from django.utils import timezone
 from django.contrib.auth.models import User
-from rest_framework.authtoken.models import Token
 from rest_framework.test import APITestCase
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import (
-    AddOn, Booking, BookingTimeSlot, Car, Expense, Invoice,
+    AddOn, AuditLog, Booking, BookingTimeSlot, Car, Expense, Invoice,
     PaymentTransaction, Service,
 )
 
@@ -43,8 +44,8 @@ class AuthAndBookingTests(APITestCase):
             )
 
     def authenticate(self, user=None):
-        token, _ = Token.objects.get_or_create(user=user or self.user)
-        self.client.credentials(HTTP_AUTHORIZATION=f'Token {token.key}')
+        access = RefreshToken.for_user(user or self.user).access_token
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access}')
 
     def booking_payload(self, time_slot='9 صباحاً'):
         return {
@@ -69,15 +70,49 @@ class AuthAndBookingTests(APITestCase):
             plate_number=plate_number,
         )
 
-    def test_register_returns_token(self):
+    def test_register_returns_access_and_refresh_tokens(self):
         response = self.client.post('/api/auth/register/', {
             'username': '0550000002',
             'name': 'عميل جديد',
             'email': '',
-            'password': 'password123',
+            'password': 'CodeCare!9284Safe',
         })
         self.assertEqual(response.status_code, 201)
-        self.assertIn('token', response.data)
+        self.assertIn('access', response.data)
+        self.assertIn('refresh', response.data)
+
+    def test_login_is_rate_limited(self):
+        cache.clear()
+        for _ in range(5):
+            response = self.client.post('/api/auth/login/', {
+                'username': '0559999999',
+                'password': 'wrong-password',
+            })
+            self.assertEqual(response.status_code, 400)
+        response = self.client.post('/api/auth/login/', {
+            'username': '0559999999',
+            'password': 'wrong-password',
+        })
+        self.assertEqual(response.status_code, 429)
+
+    def test_refresh_token_returns_new_access_token(self):
+        refresh = RefreshToken.for_user(self.user)
+        response = self.client.post('/api/auth/refresh/', {
+            'refresh': str(refresh),
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('access', response.data)
+
+    def test_registration_rejects_invalid_phone_and_weak_password(self):
+        response = self.client.post('/api/auth/register/', {
+            'username': '123',
+            'name': 'عميل جديد',
+            'email': '',
+            'password': '12345678',
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('username', response.data)
+        self.assertIn('password', response.data)
 
     def test_booking_requires_authentication(self):
         response = self.client.post('/api/bookings/', self.booking_payload())
@@ -296,6 +331,24 @@ class AuthAndBookingTests(APITestCase):
         response = self.client.delete(f'/api/manager/time-slots/{slot_id}/')
         self.assertEqual(response.status_code, 204)
         self.assertFalse(BookingTimeSlot.objects.filter(pk=slot_id).exists())
+
+    def test_manager_changes_are_written_to_audit_log(self):
+        manager = User.objects.create_superuser(
+            username='0550000077', password='password123'
+        )
+        self.authenticate(manager)
+        response = self.client.post('/api/manager/time-slots/', {
+            'label': '1 مساءً',
+            'start_time': '13:00:00',
+            'day_offset': 0,
+            'is_active': True,
+        })
+        self.assertEqual(response.status_code, 201)
+        log = AuditLog.objects.get()
+        self.assertEqual(log.user, manager)
+        self.assertEqual(log.method, 'POST')
+        self.assertEqual(log.path, '/api/manager/time-slots/')
+        self.assertEqual(log.status_code, 201)
 
     def test_manager_cannot_change_or_delete_slot_with_future_booking(self):
         manager = User.objects.create_superuser(
