@@ -22,6 +22,7 @@ from .views import (
     manager_workers, manager_worker_detail,
     manager_ledger, manager_expenses, manager_expense_detail,
     manager_time_slots, manager_time_slot_detail,
+    service_group_list, manager_service_groups, manager_service_group_detail,
     invoice_print_view, invoice_logo_view,
     moyasar_checkout_view, moyasar_reference_view, moyasar_callback_view,
 )
@@ -35,6 +36,7 @@ urlpatterns = [
 
     # Services
     path('services/', service_list, name='service-list'),
+    path('service-groups/', service_group_list, name='service-group-list'),
     path('add-ons/', add_on_list, name='add-on-list'),
     path('vehicle-categories/', vehicle_category_list, name='vehicle-category-list'),
     path('booking-time-slots/', booking_time_slot_list, name='booking-time-slot-list'),
@@ -63,6 +65,8 @@ urlpatterns = [
     path('manager/dashboard/', manager_dashboard),
     path('manager/services/', manager_services),
     path('manager/services/<int:item_id>/', manager_service_detail),
+    path('manager/service-groups/', manager_service_groups),
+    path('manager/service-groups/<int:item_id>/', manager_service_group_detail),
     path('manager/add-ons/', manager_add_ons),
     path('manager/add-ons/<int:item_id>/', manager_add_on_detail),
     path('manager/categories/', manager_categories),
