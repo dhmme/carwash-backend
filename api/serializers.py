@@ -5,17 +5,18 @@ from django.db import IntegrityError, transaction
 from django.urls import reverse
 from django.utils import timezone
 from datetime import datetime, timedelta
+from decimal import Decimal
 from rest_framework import serializers
 from .models import (
     AddOn, Service, Car, Booking, Location, VehicleCategory, Invoice, Expense,
-    PaymentTransaction, BookingTimeSlot,
+    PaymentTransaction, BookingTimeSlot, ServiceGroup,
 )
 from .payment_services import expire_stale_payments, moyasar_mode
 
 
 BOOKING_WINDOW_DAYS = 3
-def booking_slot_datetime(booking_date, time_slot):
-    slot = BookingTimeSlot.objects.filter(label=time_slot, is_active=True).first()
+def booking_slot_datetime(booking_date, time_slot, service_group=None):
+    slot = BookingTimeSlot.objects.filter(label=time_slot, group=service_group, is_active=True).first()
     if slot is None:
         return None
     booking_date += timedelta(days=slot.day_offset)
@@ -23,26 +24,39 @@ def booking_slot_datetime(booking_date, time_slot):
     return timezone.make_aware(naive_value, timezone.get_current_timezone())
 
 
-def is_booking_slot_past(booking_date, time_slot, now=None):
-    slot_value = booking_slot_datetime(booking_date, time_slot)
+def is_booking_slot_past(booking_date, time_slot, service_group=None, now=None):
+    slot_value = booking_slot_datetime(booking_date, time_slot, service_group)
     if slot_value is None:
         return False
     current_value = now or timezone.localtime()
     return slot_value <= current_value
 
 
-def past_booking_slots(booking_date, now=None):
+def past_booking_slots(booking_date, service_group=None, now=None):
     current_value = now or timezone.localtime()
     return [
-        slot.label for slot in BookingTimeSlot.objects.filter(is_active=True)
-        if is_booking_slot_past(booking_date, slot.label, current_value)
+        slot.label for slot in BookingTimeSlot.objects.filter(group=service_group, is_active=True)
+        if is_booking_slot_past(booking_date, slot.label, service_group, current_value)
     ]
 
 
+class ServiceGroupSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ServiceGroup
+        fields = ['id', 'key', 'name', 'description', 'is_active', 'ordering']
+
+
 class ServiceSerializer(serializers.ModelSerializer):
+    group_key = serializers.CharField(source='group.key', read_only=True)
+    group_name = serializers.CharField(source='group.name', read_only=True)
     class Meta:
         model = Service
-        fields = '__all__'
+        fields = ['id', 'group', 'group_key', 'group_name', 'name', 'description', 'price', 'unit', 'allows_quantity', 'is_active']
+
+    def validate(self, attrs):
+        if not attrs.get('group') and not self.instance:
+            attrs['group'] = ServiceGroup.objects.get(key='car_wash')
+        return attrs
 
 
 class AddOnSerializer(serializers.ModelSerializer):
@@ -58,9 +72,10 @@ class VehicleCategorySerializer(serializers.ModelSerializer):
 
 
 class BookingTimeSlotSerializer(serializers.ModelSerializer):
+    group_key = serializers.CharField(source='group.key', read_only=True)
     class Meta:
         model = BookingTimeSlot
-        fields = ['id', 'label', 'start_time', 'day_offset', 'is_active']
+        fields = ['id', 'group', 'group_key', 'label', 'start_time', 'day_offset', 'is_active']
 
     def validate_label(self, value):
         value = value.strip()
@@ -70,6 +85,8 @@ class BookingTimeSlotSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         instance = self.instance
+        if not attrs.get('group') and not instance:
+            attrs['group'] = ServiceGroup.objects.get(key='car_wash')
         if instance:
             protected_fields = ('label', 'start_time', 'day_offset')
             changed = any(
@@ -77,6 +94,7 @@ class BookingTimeSlotSerializer(serializers.ModelSerializer):
                 for field in protected_fields
             )
             if changed and Booking.objects.filter(
+                service_group=instance.group,
                 date__gte=timezone.localdate(),
                 time_slot=instance.label,
             ).exclude(status='canceled').exists():
@@ -165,7 +183,7 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 class BookingSerializer(serializers.ModelSerializer):
     customer = UserSerializer(read_only=True)
-    service_name = serializers.CharField(source='service.name', read_only=True)
+    service_name = serializers.SerializerMethodField()
     maps_url = serializers.SerializerMethodField()
     invoice_url = serializers.SerializerMethodField()
     payment_status = serializers.SerializerMethodField()
@@ -174,7 +192,7 @@ class BookingSerializer(serializers.ModelSerializer):
     class Meta:
         model = Booking
         fields = [
-            'id', 'customer', 'car', 'service', 'service_name',
+            'id', 'customer', 'car', 'service_group', 'service', 'service_name', 'service_items',
             'customer_name', 'customer_phone', 'car_size', 'address_text',
             'latitude', 'longitude', 'maps_url', 'date', 'time_slot',
             'status', 'payment_method', 'total_price', 'created_at',
@@ -188,6 +206,12 @@ class BookingSerializer(serializers.ModelSerializer):
         booking_date = attrs.get('date')
         time_slot = attrs.get('time_slot')
         request = self.context['request']
+        group = attrs.get('service_group')
+        if not group:
+            group = ServiceGroup.objects.get(key='car_wash')
+            attrs['service_group'] = group
+        if not group or not group.is_active:
+            raise serializers.ValidationError({'service_group': 'نوع الخدمة غير متاح حاليًا.'})
 
         now = timezone.localtime()
         today = now.date()
@@ -200,13 +224,14 @@ class BookingSerializer(serializers.ModelSerializer):
                 'date': 'الحجز متاح لليوم الحالي والثلاثة أيام القادمة فقط.'
             })
         if not BookingTimeSlot.objects.filter(
+            group=group,
             label=time_slot,
             is_active=True,
         ).exists():
             raise serializers.ValidationError({
                 'time_slot': 'وقت الحجز غير متاح.'
             })
-        if is_booking_slot_past(booking_date, time_slot, now):
+        if is_booking_slot_past(booking_date, time_slot, group, now):
             raise serializers.ValidationError({
                 'time_slot': 'هذا الوقت انتهى، اختر وقتاً قادماً.'
             })
@@ -218,7 +243,7 @@ class BookingSerializer(serializers.ModelSerializer):
             })
 
         service = attrs.get('service')
-        if not service.is_active:
+        if service and (not service.is_active or service.group_id != group.id):
             raise serializers.ValidationError({
                 'service': 'الخدمة المختارة غير متاحة حاليًا.'
             })
@@ -228,7 +253,12 @@ class BookingSerializer(serializers.ModelSerializer):
                 'payment_method': 'الدفع الإلكتروني غير مفعّل حاليًا.'
             })
 
-        if Booking.objects.filter(date=booking_date, time_slot=time_slot).exclude(
+        if group.key == 'car_wash' and not service:
+            raise serializers.ValidationError({'service': 'اختر خدمة الغسيل.'})
+        if group.key == 'furniture_wash' and not attrs.get('service_items'):
+            raise serializers.ValidationError({'service_items': 'اختر خدمة أثاث واحدة على الأقل.'})
+
+        if Booking.objects.filter(service_group=group, date=booking_date, time_slot=time_slot).exclude(
             status='canceled'
         ).exists():
             raise serializers.ValidationError({
@@ -239,16 +269,37 @@ class BookingSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         request = self.context['request']
-        service = validated_data['service']
+        group = validated_data['service_group']
+        service = validated_data.get('service')
+        requested_items = validated_data.pop('service_items', [])
         requested_add_ons = validated_data.pop('add_ons', [])
         car_size = validated_data.get('car_size')
-        total_price = service.price
+        total_price = service.price if service else Decimal('0')
+        item_snapshot = []
+        if group.key == 'furniture_wash':
+            total_price = Decimal('0')
+            seen = set()
+            for item in requested_items:
+                try:
+                    selected = Service.objects.get(pk=item.get('id'), group=group, is_active=True)
+                    quantity = max(1, min(int(item.get('quantity', 1)), 100))
+                except (Service.DoesNotExist, TypeError, ValueError, AttributeError):
+                    continue
+                if selected.id in seen:
+                    continue
+                seen.add(selected.id)
+                subtotal = selected.price * quantity
+                total_price += subtotal
+                item_snapshot.append({'id': selected.id, 'name': selected.name, 'unit': selected.unit,
+                    'quantity': quantity, 'unit_price': str(selected.price), 'subtotal': str(subtotal)})
+            if not item_snapshot:
+                raise serializers.ValidationError({'service_items': 'الخدمات المحددة غير متاحة.'})
         car = validated_data.get('car')
         category_key = car.category if car else None
         category = VehicleCategory.objects.filter(key=category_key, is_active=True).first()
         if category:
             total_price += category.price_adjustment
-        elif service.name.strip() == 'غسيل كامل' and car_size == 'big':
+        elif service and service.name.strip() == 'غسيل كامل' and car_size == 'big':
             total_price += 10
 
         add_on_snapshot = []
@@ -288,6 +339,7 @@ class BookingSerializer(serializers.ModelSerializer):
                     status='pending' if is_online else 'accepted',
                     total_price=total_price,
                     add_ons=add_on_snapshot,
+                    service_items=item_snapshot,
                     **validated_data,
                 )
                 if is_online:
@@ -304,6 +356,11 @@ class BookingSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 'time_slot': 'هذا الوقت محجوز بالفعل، اختر وقتاً آخر.'
             }) from exc
+
+    def get_service_name(self, obj):
+        if obj.service_items:
+            return '، '.join(item.get('name', '') for item in obj.service_items)
+        return obj.service.name if obj.service else obj.service_group.name
 
     def get_maps_url(self, obj):
         return obj.maps_url()
@@ -349,7 +406,8 @@ class WorkerBookingSerializer(serializers.ModelSerializer):
     car_category = serializers.CharField(source='car.category', read_only=True)
     car_color = serializers.CharField(source='car.color', read_only=True)
     plate_number = serializers.CharField(source='car.plate_number', read_only=True)
-    service_name = serializers.CharField(source='service.name', read_only=True)
+    service_name = serializers.SerializerMethodField()
+    service_group_name = serializers.CharField(source='service_group.name', read_only=True)
     maps_url = serializers.SerializerMethodField()
     payment_status = serializers.SerializerMethodField()
 
@@ -368,6 +426,7 @@ class WorkerBookingSerializer(serializers.ModelSerializer):
             'car_color',
             'plate_number',
             'service_name',
+            'service_group_name', 'service_items',
             'address_text',
             'latitude',
             'longitude',
@@ -395,6 +454,11 @@ class WorkerBookingSerializer(serializers.ModelSerializer):
         payment = getattr(obj, 'payment', None)
         return payment.status if payment else 'pending'
 
+    def get_service_name(self, obj):
+        if obj.service_items:
+            return '، '.join(f"{x.get('name')} × {x.get('quantity')}" for x in obj.service_items)
+        return obj.service.name if obj.service else obj.service_group.name
+
 
 class ManagerBookingSerializer(WorkerBookingSerializer):
     created_at = serializers.DateTimeField(read_only=True)
@@ -407,7 +471,7 @@ class ManagerBookingSerializer(WorkerBookingSerializer):
 class InvoiceSerializer(serializers.ModelSerializer):
     customer_name = serializers.SerializerMethodField()
     customer_phone = serializers.SerializerMethodField()
-    service_name = serializers.CharField(source='booking.service.name', read_only=True)
+    service_name = serializers.SerializerMethodField()
     date = serializers.DateField(source='booking.date', read_only=True)
     total = serializers.DecimalField(source='booking.total_price', max_digits=10, decimal_places=2, read_only=True)
     payment_method = serializers.CharField(source='booking.payment_method', read_only=True)
@@ -426,6 +490,12 @@ class InvoiceSerializer(serializers.ModelSerializer):
 
     def get_customer_phone(self, obj):
         return obj.booking.customer_phone or obj.booking.customer.username
+
+    def get_service_name(self, obj):
+        booking = obj.booking
+        if booking.service_items:
+            return '، '.join(item.get('name', '') for item in booking.service_items)
+        return booking.service.name if booking.service else booking.service_group.name
 
 
 class ManagerStaffSerializer(serializers.ModelSerializer):

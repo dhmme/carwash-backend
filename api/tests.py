@@ -13,14 +13,16 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import (
     AddOn, AuditLog, Booking, BookingTimeSlot, Car, Expense, Invoice,
-    PaymentTransaction, Service,
+    PaymentTransaction, Service, ServiceGroup,
 )
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class AuthAndBookingTests(APITestCase):
     def setUp(self):
+        self.car_group = ServiceGroup.objects.get(key='car_wash')
         self.service = Service.objects.create(
+            group=self.car_group,
             name='غسيل كامل',
             price=35,
         )
@@ -39,6 +41,7 @@ class AuthAndBookingTests(APITestCase):
             ('11 صباحاً', time(11, 0)),
         ]:
             BookingTimeSlot.objects.get_or_create(
+                group=self.car_group,
                 label=label,
                 defaults={'start_time': start_time},
             )
@@ -126,6 +129,7 @@ class AuthAndBookingTests(APITestCase):
         self.assertEqual(response.status_code, 201)
         booking = Booking.objects.get()
         self.assertEqual(booking.customer, self.user)
+
         self.assertEqual(booking.total_price, self.service.price)
         self.assertEqual(booking.status, 'accepted')
         invoice = Invoice.objects.get(booking=booking)
@@ -142,6 +146,25 @@ class AuthAndBookingTests(APITestCase):
         invoice_response = self.client.get(urlparse(invoice_url).path)
         self.assertEqual(invoice_response.status_code, 200)
         self.assertContains(invoice_response, self.service.name)
+
+    def test_furniture_booking_uses_quantities_and_separate_schedule(self):
+        furniture = ServiceGroup.objects.get(key='furniture_wash')
+        sofa = Service.objects.get(group=furniture, name='كنب')
+        slot = BookingTimeSlot.objects.filter(group=furniture).first()
+        self.authenticate()
+        payload = self.booking_payload(slot.label)
+        payload.pop('service')
+        payload.update({
+            'service_group': furniture.id,
+            'service_items': [{'id': sofa.id, 'quantity': 3}],
+        })
+        response = self.client.post('/api/bookings/', payload, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        booking = Booking.objects.get(pk=response.data['id'])
+        self.assertEqual(booking.total_price, Decimal('150.00'))
+        self.assertIsNone(booking.car)
+        self.assertEqual(booking.service_items[0]['quantity'], 3)
+        self.assertEqual(booking.invoice.line_items[0]['name'], 'كنب')
 
     def test_customer_only_sees_own_bookings(self):
         Booking.objects.create(
@@ -196,7 +219,7 @@ class AuthAndBookingTests(APITestCase):
         self.assertIn('time_slot', response.data)
 
     def test_booking_rejects_inactive_time_slot(self):
-        BookingTimeSlot.objects.filter(label='9 صباحاً').update(is_active=False)
+        BookingTimeSlot.objects.filter(group=self.car_group, label='9 صباحاً').update(is_active=False)
         self.authenticate()
 
         response = self.client.post('/api/bookings/', self.booking_payload())
@@ -354,7 +377,7 @@ class AuthAndBookingTests(APITestCase):
         manager = User.objects.create_superuser(
             username='0550000075', password='password123'
         )
-        slot = BookingTimeSlot.objects.get(label='9 صباحاً')
+        slot = BookingTimeSlot.objects.get(group=self.car_group, label='9 صباحاً')
         Booking.objects.create(
             customer=self.user,
             service=self.service,

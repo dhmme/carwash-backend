@@ -17,7 +17,7 @@ from rest_framework_simplejwt.tokens import RefreshToken, TokenError
 
 from .models import (
     AddOn, Booking, Car, Location, Service, VehicleCategory, Invoice, Expense,
-    PaymentTransaction, BookingTimeSlot,
+    PaymentTransaction, BookingTimeSlot, ServiceGroup,
 )
 from .payment_services import (
     PaymentVerificationError,
@@ -45,6 +45,7 @@ from .serializers import (
     ExpenseSerializer,
     past_booking_slots,
     BookingTimeSlotSerializer,
+    ServiceGroupSerializer,
 )
 
 
@@ -111,8 +112,17 @@ def logout_view(request):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def service_list(request):
-    services = Service.objects.filter(is_active=True)
+    services = Service.objects.filter(is_active=True, group__is_active=True)
+    group = request.GET.get('group')
+    if group:
+        services = services.filter(group__key=group)
     return Response(ServiceSerializer(services, many=True).data)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def service_group_list(request):
+    return Response(ServiceGroupSerializer(ServiceGroup.objects.all(), many=True).data)
 
 
 @api_view(['GET'])
@@ -132,7 +142,10 @@ def vehicle_category_list(request):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def booking_time_slot_list(request):
-    slots = BookingTimeSlot.objects.filter(is_active=True)
+    slots = BookingTimeSlot.objects.filter(is_active=True, group__is_active=True)
+    group = request.GET.get('group')
+    if group:
+        slots = slots.filter(group__key=group)
     return Response(BookingTimeSlotSerializer(slots, many=True).data)
 
 
@@ -179,7 +192,7 @@ def booking_list_create(request):
     if request.method == 'GET':
         bookings = Booking.objects.filter(
             customer=request.user
-        ).select_related('service', 'customer', 'payment').order_by('-id')
+        ).select_related('service', 'service_group', 'customer', 'payment').order_by('-id')
         serializer = BookingSerializer(
             bookings,
             many=True,
@@ -212,12 +225,13 @@ def booked_slots(request):
             {'error': 'date query parameter is invalid'},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    slots = Booking.objects.filter(date=booking_date).exclude(
+    group = get_object_or_404(ServiceGroup, key=request.GET.get('group', 'car_wash'))
+    slots = Booking.objects.filter(service_group=group, date=booking_date).exclude(
         status='canceled'
     ).values_list('time_slot', flat=True)
     return Response({
         'booked': list(slots),
-        'unavailable': past_booking_slots(booking_date),
+        'unavailable': past_booking_slots(booking_date, group),
     })
 
 
@@ -227,7 +241,7 @@ def worker_bookings(request):
     date = request.GET.get('date') or timezone.localdate()
     bookings = Booking.objects.filter(date=date).exclude(status='pending').exclude(
         status__in=['completed', 'canceled']
-    ).select_related('service', 'car', 'customer', 'payment').order_by('time_slot')
+    ).select_related('service', 'service_group', 'car', 'customer', 'payment').order_by('time_slot')
     return Response(WorkerBookingSerializer(bookings, many=True).data)
 
 
@@ -317,6 +331,18 @@ def manager_service_detail(request, item_id):
 
 @api_view(['GET', 'POST'])
 @permission_classes([IsManager])
+def manager_service_groups(request):
+    return _catalog(request, ServiceGroup, ServiceGroupSerializer)
+
+
+@api_view(['PATCH'])
+@permission_classes([IsManager])
+def manager_service_group_detail(request, item_id):
+    return _catalog_detail(request, ServiceGroup, ServiceGroupSerializer, item_id)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsManager])
 def manager_add_ons(request):
     return _catalog(request, AddOn, AddOnSerializer)
 
@@ -364,6 +390,7 @@ def manager_time_slot_detail(request, item_id):
         )
     if request.method == 'DELETE':
         has_future_bookings = Booking.objects.filter(
+            service_group=item.group,
             date__gte=timezone.localdate(),
             time_slot=item.label,
         ).exclude(status='canceled').exists()
@@ -384,7 +411,7 @@ def manager_time_slot_detail(request, item_id):
 @permission_classes([IsManager])
 def manager_bookings(request):
     bookings = Booking.objects.select_related(
-        'service', 'car', 'customer', 'invoice', 'payment'
+        'service', 'service_group', 'car', 'customer', 'invoice', 'payment'
     ).order_by('-date', '-id')
     status_filter = request.GET.get('status')
     if status_filter:
@@ -399,7 +426,7 @@ def manager_invoices(request):
         status__in=['canceled', 'pending']
     ).filter(invoice__isnull=True):
         Invoice.objects.get_or_create(booking=booking)
-    invoices = Invoice.objects.select_related('booking__service', 'booking__customer').order_by('-id')
+    invoices = Invoice.objects.select_related('booking__service', 'booking__service_group', 'booking__customer').order_by('-id')
     for invoice in invoices:
         invoice.ensure_snapshot()
     return Response(InvoiceSerializer(invoices[:500], many=True).data)

@@ -3,10 +3,27 @@ from django.contrib.auth.models import User
 import uuid
 from decimal import Decimal
 
+class ServiceGroup(models.Model):
+    key = models.CharField(max_length=40, unique=True)
+    name = models.CharField(max_length=100)
+    description = models.CharField(max_length=255, blank=True)
+    is_active = models.BooleanField(default=True)
+    ordering = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ['ordering', 'id']
+
+    def __str__(self):
+        return self.name
+
+
 class Service(models.Model):
+    group = models.ForeignKey(ServiceGroup, on_delete=models.PROTECT, related_name='services', null=True)
     name = models.CharField(max_length=100)
     description = models.TextField(blank=True)
     price = models.DecimalField(max_digits=10, decimal_places=2)
+    unit = models.CharField(max_length=30, default='خدمة')
+    allows_quantity = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
 
     def __str__(self):
@@ -35,7 +52,8 @@ class VehicleCategory(models.Model):
 
 
 class BookingTimeSlot(models.Model):
-    label = models.CharField(max_length=50, unique=True)
+    group = models.ForeignKey(ServiceGroup, on_delete=models.CASCADE, related_name='time_slots', null=True)
+    label = models.CharField(max_length=50)
     start_time = models.TimeField()
     day_offset = models.PositiveSmallIntegerField(
         default=0,
@@ -47,9 +65,10 @@ class BookingTimeSlot(models.Model):
         ordering = ['day_offset', 'start_time', 'id']
         constraints = [
             models.UniqueConstraint(
-                fields=['start_time', 'day_offset'],
-                name='unique_booking_slot_clock_time',
+                fields=['group', 'start_time', 'day_offset'],
+                name='unique_group_booking_slot_clock_time',
             ),
+            models.UniqueConstraint(fields=['group', 'label'], name='unique_group_booking_slot_label'),
         ]
 
     def __str__(self):
@@ -119,9 +138,9 @@ class Booking(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=['date', 'time_slot'],
+                fields=['service_group', 'date', 'time_slot'],
                 condition=~models.Q(status='canceled'),
-                name='unique_active_booking_slot',
+                name='unique_active_group_booking_slot',
             ),
         ]
 
@@ -133,7 +152,9 @@ class Booking(models.Model):
         blank=True,
         null=True,
     )
-    service = models.ForeignKey(Service, on_delete=models.CASCADE)
+    service_group = models.ForeignKey(ServiceGroup, on_delete=models.PROTECT, null=True)
+    service = models.ForeignKey(Service, on_delete=models.PROTECT, null=True, blank=True)
+    service_items = models.JSONField(default=list, blank=True)
 
     # معلومات العميل اللي يعبّيها من التطبيق
     customer_name = models.CharField(max_length=100, blank=True, null=True)
@@ -169,6 +190,11 @@ class Booking(models.Model):
 
     def __str__(self):
         return f"Booking #{self.id} - {self.customer_name or self.customer.username}"
+
+    def save(self, *args, **kwargs):
+        if self.service_group_id is None and self.service_id:
+            self.service_group_id = self.service.group_id
+        return super().save(*args, **kwargs)
 
     def maps_url(self):
         if self.latitude is not None and self.longitude is not None:
@@ -238,12 +264,15 @@ class Invoice(models.Model):
             Decimal('0'),
         )
         service_total = self.booking.total_price - add_on_total
-        self.line_items = [{
-            'name': self.booking.service.name,
-            'quantity': 1,
-            'unit_price': str(service_total),
-            'subtotal': str(service_total),
-        }, *add_ons]
+        if self.booking.service_items:
+            self.line_items = [*self.booking.service_items, *add_ons]
+        else:
+            self.line_items = [{
+                'name': self.booking.service.name if self.booking.service else self.booking.service_group.name,
+                'quantity': 1,
+                'unit_price': str(service_total),
+                'subtotal': str(service_total),
+            }, *add_ons]
         self.total_amount = self.booking.total_price
         self.save(update_fields=['line_items', 'total_amount'])
 
