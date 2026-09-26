@@ -9,7 +9,7 @@ from decimal import Decimal
 from rest_framework import serializers
 from .models import (
     AddOn, Service, Car, Booking, Location, VehicleCategory, Invoice, Expense,
-    PaymentTransaction, BookingTimeSlot, ServiceGroup,
+    PaymentTransaction, BookingTimeSlot, ServiceGroup, PaymentMethod,
 )
 from .payment_services import expire_stale_payments, moyasar_mode
 
@@ -102,6 +102,16 @@ class BookingTimeSlotSerializer(serializers.ModelSerializer):
                     'detail': 'لا يمكن تغيير وقت عليه حجوزات حالية أو مستقبلية.'
                 })
         return attrs
+
+
+class PaymentMethodSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PaymentMethod
+        fields = [
+            'id', 'code', 'name', 'instructions', 'requires_gateway',
+            'is_active', 'ordering',
+        ]
+        read_only_fields = ['code', 'requires_gateway']
 
 
 class CarSerializer(serializers.ModelSerializer):
@@ -248,7 +258,16 @@ class BookingSerializer(serializers.ModelSerializer):
                 'service': 'الخدمة المختارة غير متاحة حاليًا.'
             })
 
-        if attrs.get('payment_method') == 'online' and moyasar_mode() == 'disabled':
+        payment_code = attrs.get('payment_method', 'cash')
+        payment_method = PaymentMethod.objects.filter(
+            code=payment_code,
+            is_active=True,
+        ).first()
+        if payment_method is None:
+            raise serializers.ValidationError({
+                'payment_method': 'طريقة الدفع غير متاحة حاليًا.'
+            })
+        if payment_method.requires_gateway and moyasar_mode() == 'disabled':
             raise serializers.ValidationError({
                 'payment_method': 'الدفع الإلكتروني غير مفعّل حاليًا.'
             })
