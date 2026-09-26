@@ -23,6 +23,7 @@ from .views import (
     manager_ledger, manager_expenses, manager_expense_detail,
     manager_time_slots, manager_time_slot_detail,
     service_group_list, manager_service_groups, manager_service_group_detail,
+    manager_payment_methods, manager_payment_method_detail,
     invoice_print_view, invoice_logo_view,
     moyasar_checkout_view, moyasar_reference_view, moyasar_callback_view,
 )
@@ -71,6 +72,8 @@ urlpatterns = [
     path('manager/add-ons/<int:item_id>/', manager_add_on_detail),
     path('manager/categories/', manager_categories),
     path('manager/categories/<int:item_id>/', manager_category_detail),
+    path('manager/payment-methods/', manager_payment_methods),
+    path('manager/payment-methods/<int:item_id>/', manager_payment_method_detail),
     path('manager/time-slots/', manager_time_slots),
     path('manager/time-slots/<int:item_id>/', manager_time_slot_detail),
     path('manager/bookings/', manager_bookings),
