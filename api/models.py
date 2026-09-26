@@ -3,6 +3,25 @@ from django.contrib.auth.models import User
 import uuid
 from decimal import Decimal
 
+class PaymentMethod(models.Model):
+    code = models.CharField(max_length=50, unique=True, blank=True)
+    name = models.CharField(max_length=100)
+    instructions = models.CharField(max_length=255, blank=True)
+    requires_gateway = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    ordering = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ['ordering', 'id']
+
+    def save(self, *args, **kwargs):
+        if not self.code:
+            self.code = f'method_{uuid.uuid4().hex[:12]}'
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.name
+
 class ServiceGroup(models.Model):
     key = models.CharField(max_length=40, unique=True)
     name = models.CharField(max_length=100)
@@ -128,13 +147,6 @@ class Booking(models.Model):
         ('big', 'سيارة كبيرة'),
     ]
 
-    PAYMENT_METHOD_CHOICES = [
-        ('cash', 'كاش'),
-        ('card', 'شبكة'),
-        ('bank_transfer', 'تحويل بنكي'),
-        ('online', 'دفع إلكتروني'),
-    ]
-
     class Meta:
         constraints = [
             models.UniqueConstraint(
@@ -179,8 +191,7 @@ class Booking(models.Model):
 
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     payment_method = models.CharField(
-        max_length=20,
-        choices=PAYMENT_METHOD_CHOICES,
+        max_length=50,
         default='cash',
     )
     total_price = models.DecimalField(max_digits=10, decimal_places=2)
@@ -278,12 +289,11 @@ class Invoice(models.Model):
 
 
 class Expense(models.Model):
-    PAYMENT_METHOD_CHOICES = Booking.PAYMENT_METHOD_CHOICES
     date = models.DateField()
     description = models.CharField(max_length=200)
     category = models.CharField(max_length=100, blank=True, default='مصروف عام')
     amount = models.DecimalField(max_digits=10, decimal_places=2)
-    payment_method = models.CharField(max_length=20, choices=PAYMENT_METHOD_CHOICES, default='cash')
+    payment_method = models.CharField(max_length=50, default='cash')
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
