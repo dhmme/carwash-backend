@@ -17,7 +17,7 @@ from rest_framework_simplejwt.tokens import RefreshToken, TokenError
 
 from .models import (
     AddOn, Booking, Car, Location, Service, VehicleCategory, Invoice, Expense,
-    PaymentTransaction, BookingTimeSlot, ServiceGroup,
+    PaymentTransaction, BookingTimeSlot, ServiceGroup, PaymentMethod,
 )
 from .payment_services import (
     PaymentVerificationError,
@@ -42,7 +42,7 @@ from .serializers import (
     ManagerBookingSerializer,
     InvoiceSerializer,
     ManagerStaffSerializer,
-    ExpenseSerializer,
+    ExpenseSerializer, PaymentMethodSerializer,
     past_booking_slots,
     BookingTimeSlotSerializer,
     ServiceGroupSerializer,
@@ -153,9 +153,13 @@ def booking_time_slot_list(request):
 @permission_classes([AllowAny])
 def payment_config_view(request):
     mode = moyasar_mode()
+    methods = PaymentMethod.objects.filter(is_active=True)
+    if mode == 'disabled':
+        methods = methods.filter(requires_gateway=False)
     return Response({
         'online_enabled': mode != 'disabled',
         'mode': mode,
+        'methods': PaymentMethodSerializer(methods, many=True).data,
     })
 
 
@@ -367,6 +371,33 @@ def manager_category_detail(request, item_id):
 
 @api_view(['GET', 'POST'])
 @permission_classes([IsManager])
+def manager_payment_methods(request):
+    return _catalog(request, PaymentMethod, PaymentMethodSerializer)
+
+
+@api_view(['PATCH', 'DELETE'])
+@permission_classes([IsManager])
+def manager_payment_method_detail(request, item_id):
+    try:
+        item = PaymentMethod.objects.get(pk=item_id)
+    except PaymentMethod.DoesNotExist:
+        return Response({'detail': 'طريقة الدفع غير موجودة.'}, status=status.HTTP_404_NOT_FOUND)
+    if request.method == 'DELETE':
+        if Booking.objects.filter(payment_method=item.code).exists() or Expense.objects.filter(payment_method=item.code).exists():
+            return Response(
+                {'detail': 'لا يمكن حذف طريقة مرتبطة بسجلات سابقة. أوقفها بدلًا من ذلك.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        item.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+    serializer = PaymentMethodSerializer(item, data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsManager])
 def manager_time_slots(request):
     if request.method == 'GET':
         slots = BookingTimeSlot.objects.all()
@@ -439,12 +470,7 @@ def invoice_print_view(request, token):
     )
     invoice.ensure_snapshot()
     booking = invoice.booking
-    payment_names = {
-        'cash': 'كاش',
-        'card': 'شبكة',
-        'bank_transfer': 'تحويل بنكي',
-        'online': 'دفع إلكتروني',
-    }
+    payment_names = dict(PaymentMethod.objects.values_list('code', 'name'))
     return render(request, 'api/invoice.html', {
         'invoice': invoice,
         'booking': booking,
