@@ -239,7 +239,7 @@ def booking_list_create(request):
 def cancel_booking(request, booking_id):
     with transaction.atomic():
         booking = get_object_or_404(
-            Booking.objects.select_for_update().select_related('payment'),
+            Booking.objects.select_for_update(),
             pk=booking_id,
             customer=request.user,
         )
@@ -494,7 +494,7 @@ def manager_bookings(request):
 def manager_cancel_booking(request, booking_id):
     with transaction.atomic():
         booking = get_object_or_404(
-            Booking.objects.select_for_update().select_related('payment'),
+            Booking.objects.select_for_update(),
             pk=booking_id,
         )
         error = _cancel_booking(booking, manager=True)
