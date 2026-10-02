@@ -147,9 +147,27 @@ class CarSerializer(serializers.ModelSerializer):
 
 
 class LocationSerializer(serializers.ModelSerializer):
+    address_text = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default='',
+    )
+
     class Meta:
         model = Location
         fields = ['id', 'name', 'address_text', 'latitude', 'longitude']
+
+    def validate(self, attrs):
+        name = (attrs.get('name') or '').strip()
+        if not name:
+            raise serializers.ValidationError({'name': 'اسم الموقع مطلوب.'})
+        attrs['name'] = name
+        # The map coordinates are the actual service address. Keep a readable
+        # fallback for existing booking/invoice screens without asking the
+        # customer to type the same information twice.
+        if not (attrs.get('address_text') or '').strip():
+            attrs['address_text'] = name
+        return attrs
 
     def validate_latitude(self, value):
         if not -90 <= value <= 90:
