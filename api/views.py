@@ -1,13 +1,16 @@
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.conf import settings
-from django.db.models import Count, Sum
-from django.http import FileResponse
+from django.db import transaction
+from django.db.models import Count, Max, Q, Sum
+from django.http import FileResponse, HttpResponse
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from decimal import Decimal
 from pathlib import Path
+from io import BytesIO
+from openpyxl import Workbook
 from django.shortcuts import get_object_or_404, render
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
@@ -47,6 +50,21 @@ from .serializers import (
     BookingTimeSlotSerializer,
     ServiceGroupSerializer,
 )
+
+
+def _cancel_booking(booking, *, manager=False):
+    if booking.status == 'canceled':
+        return None
+    if booking.status == 'completed':
+        return 'لا يمكن إلغاء طلب مكتمل.'
+    if not manager and booking.status not in ['pending', 'accepted']:
+        return 'لا يمكن إلغاء الطلب بعد بدء العامل في تنفيذه.'
+    payment = getattr(booking, 'payment', None)
+    if payment and payment.status == 'paid':
+        return 'الطلب مدفوع إلكترونيًا ويجب معالجة الاسترجاع قبل الإلغاء.'
+    booking.status = 'canceled'
+    booking.save(update_fields=['status'])
+    return None
 
 
 @api_view(['GET'])
@@ -211,6 +229,21 @@ def booking_list_create(request):
     serializer.is_valid(raise_exception=True)
     serializer.save()
     return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def cancel_booking(request, booking_id):
+    with transaction.atomic():
+        booking = get_object_or_404(
+            Booking.objects.select_for_update().select_related('payment'),
+            pk=booking_id,
+            customer=request.user,
+        )
+        error = _cancel_booking(booking)
+    if error:
+        return Response({'detail': error}, status=status.HTTP_400_BAD_REQUEST)
+    return Response({'id': booking.id, 'status': booking.status})
 
 
 @api_view(['GET'])
@@ -447,7 +480,24 @@ def manager_bookings(request):
     status_filter = request.GET.get('status')
     if status_filter:
         bookings = bookings.filter(status=status_filter)
+    date_filter = parse_date(request.GET.get('date', ''))
+    if date_filter:
+        bookings = bookings.filter(date=date_filter)
     return Response(ManagerBookingSerializer(bookings[:500], many=True).data)
+
+
+@api_view(['POST'])
+@permission_classes([IsManager])
+def manager_cancel_booking(request, booking_id):
+    with transaction.atomic():
+        booking = get_object_or_404(
+            Booking.objects.select_for_update().select_related('payment'),
+            pk=booking_id,
+        )
+        error = _cancel_booking(booking, manager=True)
+    if error:
+        return Response({'detail': error}, status=status.HTTP_400_BAD_REQUEST)
+    return Response({'id': booking.id, 'status': booking.status})
 
 
 @api_view(['GET'])
@@ -460,7 +510,84 @@ def manager_invoices(request):
     invoices = Invoice.objects.select_related('booking__service', 'booking__service_group', 'booking__customer').order_by('-id')
     for invoice in invoices:
         invoice.ensure_snapshot()
-    return Response(InvoiceSerializer(invoices[:500], many=True).data)
+    return Response(InvoiceSerializer(invoices[:500], many=True, context={'request': request}).data)
+
+
+def _customer_rows():
+    customers = User.objects.filter(is_staff=False).annotate(
+        booking_count=Count('booking'),
+        completed_count=Count('booking', filter=Q(booking__status='completed')),
+        total_spent=Sum('booking__total_price', filter=Q(booking__status='completed')),
+        last_booking_at=Max('booking__created_at'),
+    ).order_by('-date_joined')
+    return customers
+
+
+@api_view(['GET'])
+@permission_classes([IsManager])
+def manager_customers(request):
+    customers = _customer_rows()
+    query = request.GET.get('q', '').strip()
+    if query:
+        customers = customers.filter(
+            Q(first_name__icontains=query) |
+            Q(username__icontains=query) |
+            Q(email__icontains=query)
+        )
+    data = [{
+        'id': user.id,
+        'name': user.first_name or user.username,
+        'phone': user.username,
+        'email': user.email,
+        'date_joined': user.date_joined,
+        'is_active': user.is_active,
+        'booking_count': user.booking_count,
+        'completed_count': user.completed_count,
+        'total_spent': user.total_spent or 0,
+        'last_booking_at': user.last_booking_at,
+    } for user in customers[:1000]]
+    return Response(data)
+
+
+@api_view(['GET'])
+@permission_classes([IsManager])
+def manager_customers_export(request):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = 'العملاء'
+    sheet.sheet_view.rightToLeft = True
+    sheet.append([
+        'رقم العميل', 'الاسم', 'رقم الجوال', 'البريد الإلكتروني',
+        'تاريخ التسجيل', 'عدد الحجوزات', 'الحجوزات المكتملة',
+        'إجمالي المبالغ (ر.س)', 'آخر حجز', 'حالة الحساب',
+    ])
+    for user in _customer_rows():
+        sheet.append([
+            user.id,
+            user.first_name or user.username,
+            user.username,
+            user.email,
+            timezone.localtime(user.date_joined).strftime('%Y-%m-%d %H:%M'),
+            user.booking_count,
+            user.completed_count,
+            float(user.total_spent or 0),
+            timezone.localtime(user.last_booking_at).strftime('%Y-%m-%d %H:%M') if user.last_booking_at else '',
+            'نشط' if user.is_active else 'موقوف',
+        ])
+    sheet.freeze_panes = 'A2'
+    sheet.auto_filter.ref = sheet.dimensions
+    widths = [14, 24, 18, 30, 22, 16, 20, 23, 22, 16]
+    for index, width in enumerate(widths, 1):
+        sheet.column_dimensions[chr(64 + index)].width = width
+    output = BytesIO()
+    workbook.save(output)
+    response = HttpResponse(
+        output.getvalue(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+    response['Content-Disposition'] = 'attachment; filename="code-care-customers.xlsx"'
+    response['Cache-Control'] = 'no-store'
+    return response
 
 
 def invoice_print_view(request, token):
