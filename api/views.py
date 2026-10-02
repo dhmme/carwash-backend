@@ -59,7 +59,10 @@ def _cancel_booking(booking, *, manager=False):
         return 'لا يمكن إلغاء طلب مكتمل.'
     if not manager and booking.status not in ['pending', 'accepted']:
         return 'لا يمكن إلغاء الطلب بعد بدء العامل في تنفيذه.'
-    payment = getattr(booking, 'payment', None)
+    # Accessing a missing reverse one-to-one relation raises
+    # RelatedObjectDoesNotExist, even when getattr has a default. Cash/POS
+    # bookings normally have no PaymentTransaction, so query explicitly.
+    payment = PaymentTransaction.objects.filter(booking=booking).first()
     if payment and payment.status == 'paid':
         return 'الطلب مدفوع إلكترونيًا ويجب معالجة الاسترجاع قبل الإلغاء.'
     booking.status = 'canceled'
