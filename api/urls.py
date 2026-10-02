@@ -4,7 +4,7 @@ from .views import (
     hello_view,
     service_list,
     car_list_create,
-    booking_list_create,
+    booking_list_create, cancel_booking,
     booked_slots, 
     worker_bookings,
     register_view,
@@ -24,6 +24,7 @@ from .views import (
     manager_time_slots, manager_time_slot_detail,
     service_group_list, manager_service_groups, manager_service_group_detail,
     manager_payment_methods, manager_payment_method_detail,
+    manager_cancel_booking, manager_customers, manager_customers_export,
     invoice_print_view, invoice_logo_view,
     moyasar_checkout_view, moyasar_reference_view, moyasar_callback_view,
 )
@@ -49,6 +50,7 @@ urlpatterns = [
 
     # Bookings
     path('bookings/', booking_list_create, name='booking-list-create'),
+    path('bookings/<int:booking_id>/cancel/', cancel_booking, name='booking-cancel'),
     path('branding/code-care-logo.png', invoice_logo_view, name='invoice-logo'),
     path('invoices/<uuid:token>/print/', invoice_print_view, name='invoice-print'),
     path('payments/<uuid:token>/checkout/', moyasar_checkout_view, name='moyasar-checkout'),
@@ -77,7 +79,10 @@ urlpatterns = [
     path('manager/time-slots/', manager_time_slots),
     path('manager/time-slots/<int:item_id>/', manager_time_slot_detail),
     path('manager/bookings/', manager_bookings),
+    path('manager/bookings/<int:booking_id>/cancel/', manager_cancel_booking),
     path('manager/invoices/', manager_invoices),
+    path('manager/customers/', manager_customers),
+    path('manager/customers/export/', manager_customers_export),
     path('manager/workers/', manager_workers),
     path('manager/workers/<int:item_id>/', manager_worker_detail),
     path('manager/ledger/', manager_ledger),

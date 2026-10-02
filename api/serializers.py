@@ -496,12 +496,18 @@ class InvoiceSerializer(serializers.ModelSerializer):
     payment_method = serializers.CharField(source='booking.payment_method', read_only=True)
     add_ons = serializers.JSONField(source='booking.add_ons', read_only=True)
     line_items = serializers.JSONField(read_only=True)
+    print_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Invoice
         fields = ['id', 'number', 'booking', 'issued_at', 'customer_name', 'customer_phone',
                   'service_name', 'date', 'total', 'payment_method', 'add_ons',
-                  'line_items', 'notes']
+                  'line_items', 'notes', 'print_url']
+
+    def get_print_url(self, obj):
+        request = self.context.get('request')
+        path = reverse('invoice-print', kwargs={'token': obj.public_token})
+        return request.build_absolute_uri(path) if request else path
 
     def get_customer_name(self, obj):
         b = obj.booking
