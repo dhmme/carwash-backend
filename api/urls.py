@@ -24,6 +24,7 @@ from .views import (
     manager_time_slots, manager_time_slot_detail,
     service_group_list, manager_service_groups, manager_service_group_detail,
     manager_payment_methods, manager_payment_method_detail,
+    manager_promo_codes, manager_promo_code_detail, validate_promo_code,
     manager_cancel_booking, manager_customers, manager_customers_export,
     invoice_print_view, invoice_logo_view,
     moyasar_checkout_view, moyasar_reference_view, moyasar_callback_view,
@@ -43,6 +44,7 @@ urlpatterns = [
     path('vehicle-categories/', vehicle_category_list, name='vehicle-category-list'),
     path('booking-time-slots/', booking_time_slot_list, name='booking-time-slot-list'),
     path('payment-config/', payment_config_view, name='payment-config'),
+    path('promo-codes/validate/', validate_promo_code, name='promo-code-validate'),
 
     # Cars
     path('cars/', car_list_create, name='car-list-create'),
@@ -76,6 +78,8 @@ urlpatterns = [
     path('manager/categories/<int:item_id>/', manager_category_detail),
     path('manager/payment-methods/', manager_payment_methods),
     path('manager/payment-methods/<int:item_id>/', manager_payment_method_detail),
+    path('manager/promo-codes/', manager_promo_codes),
+    path('manager/promo-codes/<int:item_id>/', manager_promo_code_detail),
     path('manager/time-slots/', manager_time_slots),
     path('manager/time-slots/<int:item_id>/', manager_time_slot_detail),
     path('manager/bookings/', manager_bookings),
