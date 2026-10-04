@@ -9,7 +9,7 @@ from decimal import Decimal
 from rest_framework import serializers
 from .models import (
     AddOn, Service, Car, Booking, Location, VehicleCategory, Invoice, Expense,
-    PaymentTransaction, BookingTimeSlot, ServiceGroup, PaymentMethod,
+    PaymentTransaction, BookingTimeSlot, ServiceGroup, PaymentMethod, PromoCode,
 )
 from .payment_services import expire_stale_payments, moyasar_mode
 
@@ -69,6 +69,24 @@ class VehicleCategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = VehicleCategory
         fields = ['id', 'key', 'name', 'price_adjustment', 'is_active']
+
+
+class PromoCodeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PromoCode
+        fields = ['id', 'code', 'discount_amount', 'is_active', 'created_at']
+        read_only_fields = ['created_at']
+
+    def validate_code(self, value):
+        value = value.strip().upper()
+        if not value or not value.replace('-', '').replace('_', '').isalnum():
+            raise serializers.ValidationError('استخدم حروفًا أو أرقامًا فقط.')
+        return value
+
+    def validate_discount_amount(self, value):
+        if value <= 0:
+            raise serializers.ValidationError('قيمة الخصم يجب أن تكون أكبر من صفر.')
+        return value
 
 
 class BookingTimeSlotSerializer(serializers.ModelSerializer):
@@ -224,10 +242,10 @@ class BookingSerializer(serializers.ModelSerializer):
             'customer_name', 'customer_phone', 'car_size', 'address_text',
             'latitude', 'longitude', 'maps_url', 'date', 'time_slot',
             'status', 'payment_method', 'total_price', 'created_at',
-            'add_ons',
+            'add_ons', 'promo_code', 'discount_amount',
             'invoice_url', 'payment_status', 'payment_checkout_url',
         ]
-        read_only_fields = ['status', 'total_price', 'created_at']
+        read_only_fields = ['status', 'total_price', 'discount_amount', 'created_at']
 
     def validate(self, attrs):
         expire_stale_payments()
@@ -310,6 +328,7 @@ class BookingSerializer(serializers.ModelSerializer):
         service = validated_data.get('service')
         requested_items = validated_data.pop('service_items', [])
         requested_add_ons = validated_data.pop('add_ons', [])
+        promo_code_value = validated_data.pop('promo_code', '').strip().upper()
         car_size = validated_data.get('car_size')
         total_price = service.price if service else Decimal('0')
         item_snapshot = []
@@ -331,14 +350,6 @@ class BookingSerializer(serializers.ModelSerializer):
                     'quantity': quantity, 'unit_price': str(selected.price), 'subtotal': str(subtotal)})
             if not item_snapshot:
                 raise serializers.ValidationError({'service_items': 'الخدمات المحددة غير متاحة.'})
-        car = validated_data.get('car')
-        category_key = car.category if car else None
-        category = VehicleCategory.objects.filter(key=category_key, is_active=True).first()
-        if category:
-            total_price += category.price_adjustment
-        elif service and service.name.strip() == 'غسيل كامل' and car_size == 'big':
-            total_price += 10
-
         add_on_snapshot = []
         seen_add_on_ids = set()
         for item in requested_add_ons:
@@ -368,6 +379,14 @@ class BookingSerializer(serializers.ModelSerializer):
                 'subtotal': str(subtotal),
             })
 
+        discount_amount = Decimal('0')
+        if promo_code_value:
+            promo = PromoCode.objects.filter(code__iexact=promo_code_value, is_active=True).first()
+            if promo is None:
+                raise serializers.ValidationError({'promo_code': 'كود الخصم غير صحيح أو غير مفعّل.'})
+            discount_amount = min(promo.discount_amount, total_price)
+            total_price -= discount_amount
+
         try:
             with transaction.atomic():
                 is_online = validated_data.get('payment_method') == 'online'
@@ -375,6 +394,8 @@ class BookingSerializer(serializers.ModelSerializer):
                     customer=request.user,
                     status='pending' if is_online else 'accepted',
                     total_price=total_price,
+                    promo_code=promo_code_value,
+                    discount_amount=discount_amount,
                     add_ons=add_on_snapshot,
                     service_items=item_snapshot,
                     **validated_data,
