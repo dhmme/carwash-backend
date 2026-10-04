@@ -70,6 +70,20 @@ class VehicleCategory(models.Model):
         return self.name
 
 
+class PromoCode(models.Model):
+    code = models.CharField(max_length=40, unique=True)
+    discount_amount = models.DecimalField(max_digits=10, decimal_places=2)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        self.code = self.code.strip().upper()
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.code
+
+
 class BookingTimeSlot(models.Model):
     group = models.ForeignKey(ServiceGroup, on_delete=models.CASCADE, related_name='time_slots', null=True)
     label = models.CharField(max_length=50)
@@ -195,6 +209,8 @@ class Booking(models.Model):
         default='cash',
     )
     total_price = models.DecimalField(max_digits=10, decimal_places=2)
+    promo_code = models.CharField(max_length=40, blank=True, default='')
+    discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     add_ons = models.JSONField(default=list, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -274,7 +290,7 @@ class Invoice(models.Model):
             (Decimal(str(item.get('subtotal', 0))) for item in add_ons),
             Decimal('0'),
         )
-        service_total = self.booking.total_price - add_on_total
+        service_total = self.booking.total_price + self.booking.discount_amount - add_on_total
         if self.booking.service_items:
             self.line_items = [*self.booking.service_items, *add_ons]
         else:
@@ -284,6 +300,13 @@ class Invoice(models.Model):
                 'unit_price': str(service_total),
                 'subtotal': str(service_total),
             }, *add_ons]
+        if self.booking.discount_amount > 0:
+            self.line_items.append({
+                'name': f'خصم ({self.booking.promo_code})',
+                'quantity': 1,
+                'unit_price': str(-self.booking.discount_amount),
+                'subtotal': str(-self.booking.discount_amount),
+            })
         self.total_amount = self.booking.total_price
         self.save(update_fields=['line_items', 'total_amount'])
 
