@@ -1,4 +1,8 @@
 from django.contrib.auth import authenticate
+from django.contrib.auth.tokens import default_token_generator
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
+from django.core.mail import send_mail
 from django.contrib.auth.models import User
 from django.conf import settings
 from django.db import transaction
@@ -7,6 +11,8 @@ from django.http import FileResponse, HttpResponse
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_date
+from django.utils.encoding import force_bytes, force_str
+from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from decimal import Decimal
 from pathlib import Path
 from io import BytesIO
@@ -128,6 +134,69 @@ def logout_view(request):
         except TokenError:
             pass
     return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+@throttle_classes([LoginRateThrottle])
+def password_reset_request(request):
+    email = str(request.data.get('email', '')).strip().lower()
+    user = User.objects.filter(email__iexact=email, is_active=True).first()
+    if user:
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        token = default_token_generator.make_token(user)
+        reset_url = f"{settings.CUSTOMER_APP_URL}/?reset_uid={uid}&reset_token={token}"
+        try:
+            send_mail(
+                'إعادة تعيين كلمة مرور Code Care',
+                f'مرحبًا {user.first_name or user.username}\n\nلإنشاء كلمة مرور جديدة افتح الرابط التالي:\n{reset_url}\n\nإذا لم تطلب ذلك فتجاهل الرسالة.',
+                settings.DEFAULT_FROM_EMAIL,
+                [user.email],
+                fail_silently=False,
+            )
+        except Exception:
+            return Response(
+                {'detail': 'خدمة البريد غير جاهزة حاليًا. تواصل مع الدعم الفني.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+    return Response({'detail': 'إذا كان البريد مسجلًا فسيصلك رابط إعادة التعيين.'})
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+@throttle_classes([LoginRateThrottle])
+def password_reset_confirm(request):
+    try:
+        user_id = force_str(urlsafe_base64_decode(str(request.data.get('uid', ''))))
+        user = User.objects.get(pk=user_id, is_active=True)
+    except Exception:
+        return Response({'detail': 'رابط إعادة التعيين غير صالح.'}, status=status.HTTP_400_BAD_REQUEST)
+    token = str(request.data.get('token', ''))
+    if not default_token_generator.check_token(user, token):
+        return Response({'detail': 'انتهت صلاحية الرابط أو تم استخدامه سابقًا.'}, status=status.HTTP_400_BAD_REQUEST)
+    password = str(request.data.get('password', ''))
+    try:
+        validate_password(password, user=user)
+    except ValidationError as exc:
+        return Response({'detail': list(exc.messages)}, status=status.HTTP_400_BAD_REQUEST)
+    user.set_password(password)
+    user.save(update_fields=['password'])
+    return Response({'detail': 'تم تغيير كلمة المرور بنجاح.'})
+
+
+@api_view(['GET', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def customer_email(request):
+    if request.method == 'GET':
+        return Response({'email': request.user.email})
+    email = str(request.data.get('email', '')).strip().lower()
+    if not email:
+        return Response({'email': ['البريد الإلكتروني مطلوب.']}, status=status.HTTP_400_BAD_REQUEST)
+    if User.objects.exclude(pk=request.user.pk).filter(email__iexact=email).exists():
+        return Response({'email': ['البريد الإلكتروني مستخدم في حساب آخر.']}, status=status.HTTP_400_BAD_REQUEST)
+    request.user.email = email
+    request.user.save(update_fields=['email'])
+    return Response({'email': request.user.email})
 
 
 @api_view(['GET'])
