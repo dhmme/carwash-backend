@@ -20,7 +20,7 @@ from rest_framework_simplejwt.tokens import RefreshToken, TokenError
 
 from .models import (
     AddOn, Booking, Car, Location, Service, VehicleCategory, Invoice, Expense,
-    PaymentTransaction, BookingTimeSlot, ServiceGroup, PaymentMethod,
+    PaymentTransaction, BookingTimeSlot, ServiceGroup, PaymentMethod, PromoCode,
 )
 from .payment_services import (
     PaymentVerificationError,
@@ -45,7 +45,7 @@ from .serializers import (
     ManagerBookingSerializer,
     InvoiceSerializer,
     ManagerStaffSerializer,
-    ExpenseSerializer, PaymentMethodSerializer,
+    ExpenseSerializer, PaymentMethodSerializer, PromoCodeSerializer,
     past_booking_slots,
     BookingTimeSlotSerializer,
     ServiceGroupSerializer,
@@ -182,6 +182,21 @@ def payment_config_view(request):
         'mode': mode,
         'methods': PaymentMethodSerializer(methods, many=True).data,
     })
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def validate_promo_code(request):
+    code = str(request.data.get('code', '')).strip().upper()
+    try:
+        subtotal = max(Decimal(str(request.data.get('subtotal', '0'))), Decimal('0'))
+    except Exception:
+        subtotal = Decimal('0')
+    promo = PromoCode.objects.filter(code__iexact=code, is_active=True).first()
+    if promo is None:
+        return Response({'detail': 'كود الخصم غير صحيح أو غير مفعّل.'}, status=status.HTTP_400_BAD_REQUEST)
+    discount = min(promo.discount_amount, subtotal)
+    return Response({'code': promo.code, 'discount_amount': discount, 'total': subtotal - discount})
 
 
 @api_view(['GET', 'POST'])
@@ -403,6 +418,18 @@ def manager_categories(request):
 @permission_classes([IsManager])
 def manager_category_detail(request, item_id):
     return _catalog_detail(request, VehicleCategory, VehicleCategorySerializer, item_id)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsManager])
+def manager_promo_codes(request):
+    return _catalog(request, PromoCode, PromoCodeSerializer)
+
+
+@api_view(['PATCH', 'DELETE'])
+@permission_classes([IsManager])
+def manager_promo_code_detail(request, item_id):
+    return _catalog_detail(request, PromoCode, PromoCodeSerializer, item_id)
 
 
 @api_view(['GET', 'POST'])
