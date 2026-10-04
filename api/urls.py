@@ -10,6 +10,7 @@ from .views import (
     register_view,
     login_view,
     logout_view,
+    password_reset_request, password_reset_confirm, customer_email,
     update_booking_status,
     location_list_create,
     add_on_list,
@@ -36,6 +37,9 @@ urlpatterns = [
     path('auth/login/', login_view, name='login'),
     path('auth/logout/', logout_view, name='logout'),
     path('auth/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
+    path('auth/password-reset/', password_reset_request, name='password-reset'),
+    path('auth/password-reset/confirm/', password_reset_confirm, name='password-reset-confirm'),
+    path('auth/email/', customer_email, name='customer-email'),
 
     # Services
     path('services/', service_list, name='service-list'),
