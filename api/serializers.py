@@ -206,6 +206,7 @@ class UserSerializer(serializers.ModelSerializer):
 
 class RegisterSerializer(serializers.ModelSerializer):
     name = serializers.CharField(write_only=True)
+    email = serializers.EmailField(required=True)
     password = serializers.CharField(write_only=True, min_length=8)
 
     class Meta:
@@ -216,6 +217,14 @@ class RegisterSerializer(serializers.ModelSerializer):
         value = value.strip()
         if len(value) != 10 or not value.startswith('05') or not value.isdigit():
             raise serializers.ValidationError('أدخل رقم جوال سعودي صحيح يبدأ بـ 05.')
+        return value
+
+    def validate_email(self, value):
+        value = value.strip().lower()
+        if not value:
+            raise serializers.ValidationError('البريد الإلكتروني مطلوب.')
+        if User.objects.filter(email__iexact=value).exists():
+            raise serializers.ValidationError('البريد الإلكتروني مستخدم في حساب آخر.')
         return value
 
     def validate_password(self, value):
