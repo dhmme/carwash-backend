@@ -4,6 +4,7 @@ from .views import (
     hello_view,
     service_list,
     car_list_create,
+    car_detail,
     booking_list_create, cancel_booking,
     booked_slots, 
     worker_bookings,
@@ -13,6 +14,8 @@ from .views import (
     password_reset_request, password_reset_confirm, customer_email,
     update_booking_status,
     location_list_create,
+    location_detail,
+    update_booking_location,
     add_on_list,
     vehicle_category_list,
     booking_time_slot_list,
@@ -56,11 +59,14 @@ urlpatterns = [
 
     # Cars
     path('cars/', car_list_create, name='car-list-create'),
+    path('cars/<int:item_id>/', car_detail, name='car-detail'),
     path('locations/', location_list_create, name='location-list-create'),
+    path('locations/<int:item_id>/', location_detail, name='location-detail'),
 
     # Bookings
     path('bookings/', booking_list_create, name='booking-list-create'),
     path('bookings/<int:booking_id>/cancel/', cancel_booking, name='booking-cancel'),
+    path('bookings/<int:booking_id>/location/', update_booking_location, name='booking-location'),
     path('branding/code-care-logo.png', invoice_logo_view, name='invoice-logo'),
     path('invoices/<uuid:token>/print/', invoice_print_view, name='invoice-print'),
     path('payments/<uuid:token>/checkout/', moyasar_checkout_view, name='moyasar-checkout'),

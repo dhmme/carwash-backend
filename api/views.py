@@ -310,6 +310,22 @@ def car_list_create(request):
     return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def car_detail(request, item_id):
+    car = get_object_or_404(Car, pk=item_id, user=request.user)
+    if Booking.objects.filter(
+        car=car,
+        status__in=['pending', 'accepted', 'on_the_way', 'in_progress'],
+    ).exists():
+        return Response(
+            {'detail': 'لا يمكن حذف مركبة مرتبطة بحجز قائم.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    car.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def location_list_create(request):
@@ -321,6 +337,14 @@ def location_list_create(request):
     serializer.is_valid(raise_exception=True)
     serializer.save(user=request.user)
     return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def location_detail(request, item_id):
+    location = get_object_or_404(Location, pk=item_id, user=request.user)
+    location.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 @api_view(['GET', 'POST'])
@@ -360,6 +384,52 @@ def cancel_booking(request, booking_id):
     if error:
         return Response({'detail': error}, status=status.HTTP_400_BAD_REQUEST)
     return Response({'id': booking.id, 'status': booking.status})
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def update_booking_location(request, booking_id):
+    with transaction.atomic():
+        booking = get_object_or_404(
+            Booking.objects.select_for_update(),
+            pk=booking_id,
+            customer=request.user,
+        )
+        if booking.status not in ['pending', 'accepted']:
+            return Response(
+                {'detail': 'لا يمكن تعديل الموقع بعد بدء تنفيذ الطلب.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        location_id = request.data.get('location')
+        if location_id:
+            location = get_object_or_404(
+                Location,
+                pk=location_id,
+                user=request.user,
+            )
+            address_text = location.name
+            latitude = location.latitude
+            longitude = location.longitude
+        else:
+            try:
+                latitude = float(request.data.get('latitude'))
+                longitude = float(request.data.get('longitude'))
+            except (TypeError, ValueError):
+                return Response(
+                    {'detail': 'حدد موقعًا محفوظًا أو موقعك الحالي.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not -90 <= latitude <= 90 or not -180 <= longitude <= 180:
+                return Response(
+                    {'detail': 'إحداثيات الموقع غير صحيحة.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            address_text = 'الموقع الحالي'
+        booking.address_text = address_text
+        booking.latitude = latitude
+        booking.longitude = longitude
+        booking.save(update_fields=['address_text', 'latitude', 'longitude'])
+    return Response(BookingSerializer(booking, context={'request': request}).data)
 
 
 @api_view(['GET'])
