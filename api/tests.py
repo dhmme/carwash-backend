@@ -12,7 +12,7 @@ from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import (
-    AddOn, AuditLog, Booking, BookingTimeSlot, Car, Expense, Invoice,
+    AddOn, AuditLog, Booking, BookingTimeSlot, Car, Expense, Invoice, Location,
     CustomerPackage, PackagePlan, PaymentTransaction, Service, ServiceGroup,
 )
 
@@ -230,6 +230,92 @@ class AuthAndBookingTests(APITestCase):
         response = self.client.post('/api/bookings/', payload)
         self.assertEqual(response.status_code, 400)
         self.assertIn('car', response.data)
+
+    def test_customer_can_delete_unused_vehicle_but_not_vehicle_on_active_booking(self):
+        unused_car = self.create_car(plate_number='أ ب ج 3333')
+        active_car = self.create_car(plate_number='أ ب ج 4444')
+        Booking.objects.create(
+            customer=self.user,
+            car=active_car,
+            service=self.service,
+            date=timezone.localdate() + timedelta(days=1),
+            time_slot='10 صباحاً',
+            total_price=35,
+            status='accepted',
+        )
+        self.authenticate()
+
+        response = self.client.delete(f'/api/cars/{unused_car.id}/')
+        self.assertEqual(response.status_code, 204)
+        response = self.client.delete(f'/api/cars/{active_car.id}/')
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(Car.objects.filter(pk=active_car.id).exists())
+
+    def test_customer_can_delete_saved_location(self):
+        location = Location.objects.create(
+            user=self.user,
+            name='المنزل',
+            address_text='المنزل',
+            latitude=24.7136,
+            longitude=46.6753,
+        )
+        self.authenticate()
+
+        response = self.client.delete(f'/api/locations/{location.id}/')
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Location.objects.filter(pk=location.id).exists())
+
+    def test_customer_can_change_location_before_booking_starts(self):
+        booking = Booking.objects.create(
+            customer=self.user,
+            service=self.service,
+            date=timezone.localdate() + timedelta(days=1),
+            time_slot='10 صباحاً',
+            total_price=35,
+            status='accepted',
+            address_text='الموقع القديم',
+            latitude=24.0,
+            longitude=46.0,
+        )
+        location = Location.objects.create(
+            user=self.user,
+            name='العمل',
+            address_text='العمل',
+            latitude=24.75,
+            longitude=46.70,
+        )
+        self.authenticate()
+
+        response = self.client.patch(
+            f'/api/bookings/{booking.id}/location/',
+            {'location': location.id},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        booking.refresh_from_db()
+        self.assertEqual(booking.address_text, 'العمل')
+        self.assertEqual(booking.latitude, 24.75)
+
+        response = self.client.patch(
+            f'/api/bookings/{booking.id}/location/',
+            {'latitude': 24.80, 'longitude': 46.80},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        booking.refresh_from_db()
+        self.assertEqual(booking.address_text, 'الموقع الحالي')
+        self.assertEqual(booking.longitude, 46.80)
+
+        booking.status = 'in_progress'
+        booking.save(update_fields=['status'])
+        response = self.client.patch(
+            f'/api/bookings/{booking.id}/location/',
+            {'location': location.id},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)
 
     def test_booking_rejects_inactive_service(self):
         self.service.is_active = False
