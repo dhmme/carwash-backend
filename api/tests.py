@@ -13,7 +13,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import (
     AddOn, AuditLog, Booking, BookingTimeSlot, Car, Expense, Invoice,
-    PaymentTransaction, Service, ServiceGroup,
+    CustomerPackage, PackagePlan, PaymentTransaction, Service, ServiceGroup,
 )
 
 
@@ -146,6 +146,49 @@ class AuthAndBookingTests(APITestCase):
         invoice_response = self.client.get(urlparse(invoice_url).path)
         self.assertEqual(invoice_response.status_code, 200)
         self.assertContains(invoice_response, self.service.name)
+
+    def test_package_balance_works_with_any_customer_vehicle_and_cancel_restores_it(self):
+        first_car = self.create_car(plate_number='أ ب ج 1111')
+        second_car = self.create_car(plate_number='أ ب ج 2222')
+        plan = PackagePlan.objects.create(
+            name='باقة تجريبية',
+            washes_count=4,
+            price=77,
+            included_service=self.service,
+            validity_days=60,
+        )
+        customer_package = CustomerPackage.objects.create(
+            customer=self.user,
+            plan=plan,
+            status='active',
+            remaining_washes=4,
+            activated_at=timezone.now(),
+            expires_at=timezone.now() + timedelta(days=60),
+        )
+        add_on = AddOn.objects.create(name='معطر', price=10)
+        self.authenticate()
+        payload = self.booking_payload()
+        payload.update({
+            'car': second_car.id,
+            'customer_package': customer_package.id,
+            'add_ons': [{'id': add_on.id, 'quantity': 1}],
+        })
+
+        response = self.client.post('/api/bookings/', payload, format='json')
+
+        self.assertEqual(response.status_code, 201, response.data)
+        booking = Booking.objects.get(pk=response.data['id'])
+        customer_package.refresh_from_db()
+        self.assertNotEqual(first_car.id, booking.car_id)
+        self.assertEqual(second_car.id, booking.car_id)
+        self.assertEqual(booking.total_price, Decimal('10.00'))
+        self.assertEqual(customer_package.remaining_washes, 3)
+
+        response = self.client.post(f'/api/bookings/{booking.id}/cancel/')
+
+        self.assertEqual(response.status_code, 200, response.data)
+        customer_package.refresh_from_db()
+        self.assertEqual(customer_package.remaining_washes, 4)
 
     def test_furniture_booking_uses_quantities_and_separate_schedule(self):
         furniture = ServiceGroup.objects.get(key='furniture_wash')

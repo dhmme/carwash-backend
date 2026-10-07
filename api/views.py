@@ -14,6 +14,7 @@ from django.utils.dateparse import parse_date
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from decimal import Decimal
+from datetime import timedelta
 from pathlib import Path
 from io import BytesIO
 from openpyxl import Workbook
@@ -27,6 +28,7 @@ from rest_framework_simplejwt.tokens import RefreshToken, TokenError
 from .models import (
     AddOn, Booking, Car, Location, Service, VehicleCategory, Invoice, Expense,
     PaymentTransaction, BookingTimeSlot, ServiceGroup, PaymentMethod, PromoCode,
+    PackagePlan, CustomerPackage,
 )
 from .payment_services import (
     PaymentVerificationError,
@@ -52,6 +54,7 @@ from .serializers import (
     InvoiceSerializer,
     ManagerStaffSerializer,
     ExpenseSerializer, PaymentMethodSerializer, PromoCodeSerializer,
+    PackagePlanSerializer, CustomerPackageSerializer,
     past_booking_slots,
     BookingTimeSlotSerializer,
     ServiceGroupSerializer,
@@ -73,6 +76,12 @@ def _cancel_booking(booking, *, manager=False):
         return 'الطلب مدفوع إلكترونيًا ويجب معالجة الاسترجاع قبل الإلغاء.'
     booking.status = 'canceled'
     booking.save(update_fields=['status'])
+    if booking.package_wash_used and booking.customer_package_id:
+        package = CustomerPackage.objects.select_for_update().get(pk=booking.customer_package_id)
+        package.remaining_washes += 1
+        package.save(update_fields=['remaining_washes'])
+        booking.package_wash_used = False
+        booking.save(update_fields=['package_wash_used'])
     return None
 
 
@@ -251,6 +260,26 @@ def payment_config_view(request):
         'mode': mode,
         'methods': PaymentMethodSerializer(methods, many=True).data,
     })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def package_plan_list(request):
+    return Response(PackagePlanSerializer(PackagePlan.objects.filter(is_active=True), many=True).data)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def customer_packages(request):
+    if request.method == 'GET':
+        items = CustomerPackage.objects.filter(customer=request.user).select_related('plan__included_service')
+        return Response(CustomerPackageSerializer(items, many=True).data)
+    plan = get_object_or_404(PackagePlan, pk=request.data.get('plan'), is_active=True)
+    payment_code = str(request.data.get('payment_method', 'bank_transfer'))
+    if not PaymentMethod.objects.filter(code=payment_code, is_active=True, requires_gateway=False).exists():
+        return Response({'payment_method': ['طريقة الدفع غير متاحة.']}, status=status.HTTP_400_BAD_REQUEST)
+    item = CustomerPackage.objects.create(customer=request.user, plan=plan, payment_method=payment_code)
+    return Response(CustomerPackageSerializer(item).data, status=status.HTTP_201_CREATED)
 
 
 @api_view(['POST'])
@@ -526,6 +555,44 @@ def manager_payment_method_detail(request, item_id):
     serializer.is_valid(raise_exception=True)
     serializer.save()
     return Response(serializer.data)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsManager])
+def manager_packages(request):
+    return _catalog(request, PackagePlan, PackagePlanSerializer)
+
+
+@api_view(['PATCH', 'DELETE'])
+@permission_classes([IsManager])
+def manager_package_detail(request, item_id):
+    return _catalog_detail(request, PackagePlan, PackagePlanSerializer, item_id)
+
+
+@api_view(['GET'])
+@permission_classes([IsManager])
+def manager_package_purchases(request):
+    items = CustomerPackage.objects.select_related('customer', 'plan__included_service')
+    return Response(CustomerPackageSerializer(items[:500], many=True).data)
+
+
+@api_view(['PATCH'])
+@permission_classes([IsManager])
+def manager_package_purchase_detail(request, item_id):
+    item = get_object_or_404(CustomerPackage, pk=item_id)
+    requested = request.data.get('status')
+    if requested not in ['active', 'rejected']:
+        return Response({'status': ['الحالة غير صحيحة.']}, status=status.HTTP_400_BAD_REQUEST)
+    if requested == 'active' and item.status != 'active':
+        item.status = 'active'
+        item.remaining_washes = item.plan.washes_count
+        item.activated_at = timezone.now()
+        item.expires_at = item.activated_at + timedelta(days=item.plan.validity_days)
+        item.save(update_fields=['status', 'remaining_washes', 'activated_at', 'expires_at'])
+    elif requested == 'rejected' and item.status == 'pending':
+        item.status = 'rejected'
+        item.save(update_fields=['status'])
+    return Response(CustomerPackageSerializer(item).data)
 
 
 @api_view(['GET', 'POST'])
