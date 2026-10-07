@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import User
+from django.utils import timezone
 import uuid
 from decimal import Decimal
 
@@ -82,6 +83,41 @@ class PromoCode(models.Model):
 
     def __str__(self):
         return self.code
+
+
+class PackagePlan(models.Model):
+    name = models.CharField(max_length=100)
+    washes_count = models.PositiveSmallIntegerField()
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    included_service = models.ForeignKey(Service, on_delete=models.PROTECT, related_name='package_plans')
+    validity_days = models.PositiveSmallIntegerField(default=60)
+    is_active = models.BooleanField(default=True)
+    ordering = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ['ordering', 'id']
+
+    def __str__(self):
+        return self.name
+
+
+class CustomerPackage(models.Model):
+    STATUS_CHOICES = [('pending', 'بانتظار الاعتماد'), ('active', 'نشطة'), ('rejected', 'مرفوضة'), ('expired', 'منتهية')]
+    customer = models.ForeignKey(User, on_delete=models.CASCADE, related_name='wash_packages')
+    plan = models.ForeignKey(PackagePlan, on_delete=models.PROTECT, related_name='purchases')
+    payment_method = models.CharField(max_length=50, default='bank_transfer')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    remaining_washes = models.PositiveSmallIntegerField(default=0)
+    purchased_at = models.DateTimeField(auto_now_add=True)
+    activated_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-id']
+
+    @property
+    def usable(self):
+        return self.status == 'active' and self.remaining_washes > 0 and self.expires_at and self.expires_at > timezone.now()
 
 
 class BookingTimeSlot(models.Model):
@@ -212,6 +248,8 @@ class Booking(models.Model):
     promo_code = models.CharField(max_length=40, blank=True, default='')
     discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     add_ons = models.JSONField(default=list, blank=True)
+    customer_package = models.ForeignKey(CustomerPackage, on_delete=models.PROTECT, null=True, blank=True, related_name='bookings')
+    package_wash_used = models.BooleanField(default=False)
 
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -295,7 +333,13 @@ class Invoice(models.Model):
             self.line_items = [*self.booking.service_items, *add_ons]
         else:
             self.line_items = [{
-                'name': self.booking.service.name if self.booking.service else self.booking.service_group.name,
+                'name': (
+                    f'{self.booking.service.name} (من الباقة)'
+                    if self.booking.package_wash_used and self.booking.service
+                    else self.booking.service.name
+                    if self.booking.service
+                    else self.booking.service_group.name
+                ),
                 'quantity': 1,
                 'unit_price': str(service_total),
                 'subtotal': str(service_total),

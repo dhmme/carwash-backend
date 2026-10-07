@@ -10,6 +10,7 @@ from rest_framework import serializers
 from .models import (
     AddOn, Service, Car, Booking, Location, VehicleCategory, Invoice, Expense,
     PaymentTransaction, BookingTimeSlot, ServiceGroup, PaymentMethod, PromoCode,
+    PackagePlan, CustomerPackage,
 )
 from .payment_services import expire_stale_payments, moyasar_mode
 
@@ -132,6 +133,28 @@ class PaymentMethodSerializer(serializers.ModelSerializer):
         read_only_fields = ['code', 'requires_gateway']
 
 
+class PackagePlanSerializer(serializers.ModelSerializer):
+    included_service_name = serializers.CharField(source='included_service.name', read_only=True)
+    class Meta:
+        model = PackagePlan
+        fields = ['id', 'name', 'washes_count', 'price', 'included_service', 'included_service_name', 'validity_days', 'is_active', 'ordering']
+
+
+class CustomerPackageSerializer(serializers.ModelSerializer):
+    plan_name = serializers.CharField(source='plan.name', read_only=True)
+    included_service = serializers.IntegerField(source='plan.included_service_id', read_only=True)
+    included_service_name = serializers.CharField(source='plan.included_service.name', read_only=True)
+    customer_name = serializers.SerializerMethodField()
+    customer_phone = serializers.CharField(source='customer.username', read_only=True)
+    class Meta:
+        model = CustomerPackage
+        fields = ['id', 'customer', 'customer_name', 'customer_phone', 'plan', 'plan_name', 'included_service', 'included_service_name', 'payment_method', 'status', 'remaining_washes', 'purchased_at', 'activated_at', 'expires_at']
+        read_only_fields = ['customer', 'status', 'remaining_washes', 'purchased_at', 'activated_at', 'expires_at']
+
+    def get_customer_name(self, obj):
+        return obj.customer.first_name or obj.customer.username
+
+
 class CarSerializer(serializers.ModelSerializer):
     class Meta:
         model = Car
@@ -252,9 +275,10 @@ class BookingSerializer(serializers.ModelSerializer):
             'latitude', 'longitude', 'maps_url', 'date', 'time_slot',
             'status', 'payment_method', 'total_price', 'created_at',
             'add_ons', 'promo_code', 'discount_amount',
+            'customer_package', 'package_wash_used',
             'invoice_url', 'payment_status', 'payment_checkout_url',
         ]
-        read_only_fields = ['status', 'total_price', 'discount_amount', 'created_at']
+        read_only_fields = ['status', 'total_price', 'discount_amount', 'package_wash_used', 'created_at']
 
     def validate(self, attrs):
         expire_stale_payments()
@@ -303,6 +327,13 @@ class BookingSerializer(serializers.ModelSerializer):
                 'service': 'الخدمة المختارة غير متاحة حاليًا.'
             })
 
+        package = attrs.get('customer_package')
+        if package:
+            if package.customer_id != request.user.id or not package.usable:
+                raise serializers.ValidationError({'customer_package': 'الباقة غير متاحة أو انتهت صلاحيتها.'})
+            if group.key != 'car_wash' or not service or package.plan.included_service_id != service.id:
+                raise serializers.ValidationError({'customer_package': 'هذه الباقة لا تشمل خدمة الغسيل المختارة.'})
+
         payment_code = attrs.get('payment_method', 'cash')
         payment_method = PaymentMethod.objects.filter(
             code=payment_code,
@@ -315,6 +346,10 @@ class BookingSerializer(serializers.ModelSerializer):
         if payment_method.requires_gateway and moyasar_mode() == 'disabled':
             raise serializers.ValidationError({
                 'payment_method': 'الدفع الإلكتروني غير مفعّل حاليًا.'
+            })
+        if package and payment_method.requires_gateway:
+            raise serializers.ValidationError({
+                'payment_method': 'استخدام رصيد الباقة متاح مع طرق الدفع غير الإلكترونية للخدمات الإضافية.'
             })
 
         if group.key == 'car_wash' and not service:
@@ -340,6 +375,9 @@ class BookingSerializer(serializers.ModelSerializer):
         promo_code_value = validated_data.pop('promo_code', '').strip().upper()
         car_size = validated_data.get('car_size')
         total_price = service.price if service else Decimal('0')
+        package = validated_data.get('customer_package')
+        if package:
+            total_price = Decimal('0')
         item_snapshot = []
         if group.key == 'furniture_wash':
             total_price = Decimal('0')
@@ -390,6 +428,8 @@ class BookingSerializer(serializers.ModelSerializer):
 
         discount_amount = Decimal('0')
         if promo_code_value:
+            if package:
+                raise serializers.ValidationError({'promo_code': 'لا يجمع كود الخصم مع استخدام الباقة.'})
             promo = PromoCode.objects.filter(code__iexact=promo_code_value, is_active=True).first()
             if promo is None:
                 raise serializers.ValidationError({'promo_code': 'كود الخصم غير صحيح أو غير مفعّل.'})
@@ -398,6 +438,12 @@ class BookingSerializer(serializers.ModelSerializer):
 
         try:
             with transaction.atomic():
+                if package:
+                    package = CustomerPackage.objects.select_for_update().select_related('plan').get(pk=package.pk)
+                    if not package.usable or package.customer_id != request.user.id:
+                        raise serializers.ValidationError({'customer_package': 'رصيد الباقة غير متاح.'})
+                    package.remaining_washes -= 1
+                    package.save(update_fields=['remaining_washes'])
                 is_online = validated_data.get('payment_method') == 'online'
                 booking = Booking.objects.create(
                     customer=request.user,
@@ -407,6 +453,7 @@ class BookingSerializer(serializers.ModelSerializer):
                     discount_amount=discount_amount,
                     add_ons=add_on_snapshot,
                     service_items=item_snapshot,
+                    package_wash_used=bool(package),
                     **validated_data,
                 )
                 if is_online:
