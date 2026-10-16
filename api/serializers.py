@@ -140,6 +140,15 @@ class PackagePlanSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'washes_count', 'price', 'included_service', 'included_service_name', 'validity_days', 'is_active', 'ordering']
 
 
+class ManagerPackageGrantSerializer(serializers.Serializer):
+    customer = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.filter(is_active=True, is_staff=False, is_superuser=False),
+    )
+    plan = serializers.PrimaryKeyRelatedField(queryset=PackagePlan.objects.filter(is_active=True))
+    reference = serializers.UUIDField()
+    reason = serializers.CharField(max_length=500)
+
+
 class CustomerPackageSerializer(serializers.ModelSerializer):
     plan_name = serializers.CharField(source='plan.name', read_only=True)
     included_service = serializers.IntegerField(source='plan.included_service_id', read_only=True)
