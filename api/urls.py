@@ -32,6 +32,7 @@ from .views import (
     manager_cancel_booking, manager_customers, manager_customers_export,
     package_plan_list, customer_packages, manager_packages, manager_package_detail,
     manager_package_purchases, manager_package_purchase_detail,
+    manager_revoke_package,
     invoice_print_view, invoice_logo_view,
     moyasar_checkout_view, moyasar_reference_view, moyasar_callback_view,
 )
@@ -98,6 +99,7 @@ urlpatterns = [
     path('manager/packages/<int:item_id>/', manager_package_detail),
     path('manager/package-purchases/', manager_package_purchases),
     path('manager/package-purchases/<int:item_id>/', manager_package_purchase_detail),
+    path('manager/package-purchases/<int:item_id>/revoke/', manager_revoke_package),
     path('manager/time-slots/', manager_time_slots),
     path('manager/time-slots/<int:item_id>/', manager_time_slot_detail),
     path('manager/bookings/', manager_bookings),

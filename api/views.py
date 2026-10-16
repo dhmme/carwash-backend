@@ -4,6 +4,8 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.core.mail import send_mail
 from django.contrib.auth.models import User
+from django.contrib.admin.models import LogEntry, ADDITION, CHANGE
+from django.contrib.contenttypes.models import ContentType
 from django.conf import settings
 from django.db import transaction
 from django.db.models import Count, Max, Q, Sum
@@ -54,7 +56,7 @@ from .serializers import (
     InvoiceSerializer,
     ManagerStaffSerializer,
     ExpenseSerializer, PaymentMethodSerializer, PromoCodeSerializer,
-    PackagePlanSerializer, CustomerPackageSerializer,
+    PackagePlanSerializer, CustomerPackageSerializer, ManagerPackageGrantSerializer,
     past_booking_slots,
     BookingTimeSlotSerializer,
     ServiceGroupSerializer,
@@ -639,29 +641,98 @@ def manager_package_detail(request, item_id):
     return _catalog_detail(request, PackagePlan, PackagePlanSerializer, item_id)
 
 
-@api_view(['GET'])
+@api_view(['GET', 'POST'])
 @permission_classes([IsManager])
 def manager_package_purchases(request):
+    if request.method == 'POST':
+        serializer = ManagerPackageGrantSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        with transaction.atomic():
+            # Serializes grants for this customer, including retries of one request.
+            User.objects.select_for_update().get(pk=data['customer'].pk)
+            existing = CustomerPackage.objects.filter(grant_reference=data['reference']).first()
+            if existing:
+                if existing.customer_id != data['customer'].pk or existing.plan_id != data['plan'].pk:
+                    return Response({'detail': 'مرجع المنح مستخدم لعملية أخرى.'}, status=409)
+                return Response(CustomerPackageSerializer(existing).data)
+            now = timezone.now()
+            item, created = CustomerPackage.objects.get_or_create(
+                grant_reference=data['reference'],
+                defaults={
+                    'customer': data['customer'], 'plan': data['plan'],
+                    'payment_method': 'manager_grant', 'status': 'active',
+                    'remaining_washes': data['plan'].washes_count,
+                    'activated_at': now,
+                    'expires_at': now + timedelta(days=data['plan'].validity_days),
+                },
+            )
+            if not created:
+                if item.customer_id != data['customer'].pk or item.plan_id != data['plan'].pk:
+                    return Response({'detail': 'مرجع المنح مستخدم لعملية أخرى.'}, status=409)
+                return Response(CustomerPackageSerializer(item).data)
+            _log_package_change(request, item, ADDITION, 'منح إداري: ' + data['reason'])
+        return Response(CustomerPackageSerializer(item).data, status=201)
     items = CustomerPackage.objects.select_related('customer', 'plan__included_service')
+    if request.GET.get('customer'):
+        try:
+            customer_id = int(request.GET['customer'])
+        except (ValueError, TypeError):
+            return Response({'detail': 'العميل غير صحيح.'}, status=400)
+        items = items.filter(customer_id=customer_id)
     return Response(CustomerPackageSerializer(items[:500], many=True).data)
+
+
+def _log_package_change(request, item, action, message):
+    LogEntry.objects.create(
+        user=request.user,
+        content_type=ContentType.objects.get_for_model(CustomerPackage),
+        object_id=str(item.pk), object_repr=f'باقة #{item.pk} للعميل #{item.customer_id}',
+        action_flag=action, change_message=message,
+    )
+
+
+@api_view(['POST'])
+@permission_classes([IsManager])
+def manager_revoke_package(request, item_id):
+    reason = request.data.get('reason')
+    if not isinstance(reason, str) or not reason.strip() or len(reason) > 500:
+        return Response({'detail': 'اكتب سبب الإلغاء (حتى ٥٠٠ حرف).'}, status=400)
+    with transaction.atomic():
+        item = get_object_or_404(CustomerPackage.objects.select_for_update(), pk=item_id)
+        if item.status == 'revoked':
+            return Response(CustomerPackageSerializer(item).data)
+        item.status = 'revoked'
+        item.save(update_fields=['status'])
+        _log_package_change(
+            request, item, CHANGE,
+            f'إلغاء الباقة؛ الرصيد الموقوف: {item.remaining_washes}. السبب: {reason.strip()}',
+        )
+    return Response(CustomerPackageSerializer(item).data)
 
 
 @api_view(['PATCH'])
 @permission_classes([IsManager])
 def manager_package_purchase_detail(request, item_id):
-    item = get_object_or_404(CustomerPackage, pk=item_id)
     requested = request.data.get('status')
     if requested not in ['active', 'rejected']:
         return Response({'status': ['الحالة غير صحيحة.']}, status=status.HTTP_400_BAD_REQUEST)
-    if requested == 'active' and item.status != 'active':
-        item.status = 'active'
-        item.remaining_washes = item.plan.washes_count
-        item.activated_at = timezone.now()
-        item.expires_at = item.activated_at + timedelta(days=item.plan.validity_days)
-        item.save(update_fields=['status', 'remaining_washes', 'activated_at', 'expires_at'])
-    elif requested == 'rejected' and item.status == 'pending':
-        item.status = 'rejected'
-        item.save(update_fields=['status'])
+    with transaction.atomic():
+        item = get_object_or_404(CustomerPackage.objects.select_for_update(), pk=item_id)
+        if requested == 'active' and item.status == 'active':
+            return Response(CustomerPackageSerializer(item).data)
+        if item.status != 'pending':
+            return Response({'detail': 'يمكن اعتماد أو رفض الطلبات المنتظرة فقط. امنح باقة جديدة عند الحاجة.'}, status=400)
+        if requested == 'active':
+            item.status = 'active'
+            item.remaining_washes = item.plan.washes_count
+            item.activated_at = timezone.now()
+            item.expires_at = item.activated_at + timedelta(days=item.plan.validity_days)
+            item.save(update_fields=['status', 'remaining_washes', 'activated_at', 'expires_at'])
+        else:
+            item.status = 'rejected'
+            item.save(update_fields=['status'])
+        _log_package_change(request, item, CHANGE, 'تغيير الحالة إلى ' + requested)
     return Response(CustomerPackageSerializer(item).data)
 
 

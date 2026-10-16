@@ -102,7 +102,7 @@ class PackagePlan(models.Model):
 
 
 class CustomerPackage(models.Model):
-    STATUS_CHOICES = [('pending', 'بانتظار الاعتماد'), ('active', 'نشطة'), ('rejected', 'مرفوضة'), ('expired', 'منتهية')]
+    STATUS_CHOICES = [('pending', 'بانتظار الاعتماد'), ('active', 'نشطة'), ('rejected', 'مرفوضة'), ('expired', 'منتهية'), ('revoked', 'ملغاة من الإدارة')]
     customer = models.ForeignKey(User, on_delete=models.CASCADE, related_name='wash_packages')
     plan = models.ForeignKey(PackagePlan, on_delete=models.PROTECT, related_name='purchases')
     payment_method = models.CharField(max_length=50, default='bank_transfer')
@@ -111,6 +111,7 @@ class CustomerPackage(models.Model):
     purchased_at = models.DateTimeField(auto_now_add=True)
     activated_at = models.DateTimeField(null=True, blank=True)
     expires_at = models.DateTimeField(null=True, blank=True)
+    grant_reference = models.UUIDField(null=True, blank=True, unique=True, editable=False)
 
     class Meta:
         ordering = ['-id']

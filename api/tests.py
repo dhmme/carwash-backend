@@ -77,7 +77,7 @@ class AuthAndBookingTests(APITestCase):
         response = self.client.post('/api/auth/register/', {
             'username': '0550000002',
             'name': 'عميل جديد',
-            'email': '',
+            'email': 'new-customer@example.com',
             'password': 'CodeCare!9284Safe',
         })
         self.assertEqual(response.status_code, 201)
