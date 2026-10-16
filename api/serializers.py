@@ -154,7 +154,7 @@ class CustomerPackageSerializer(serializers.ModelSerializer):
     included_service = serializers.IntegerField(source='plan.included_service_id', read_only=True)
     included_service_name = serializers.CharField(source='plan.included_service.name', read_only=True)
     customer_name = serializers.SerializerMethodField()
-    customer_phone = serializers.CharField(source='customer.username', read_only=True)
+    customer_phone = serializers.SerializerMethodField()
     class Meta:
         model = CustomerPackage
         fields = ['id', 'customer', 'customer_name', 'customer_phone', 'plan', 'plan_name', 'included_service', 'included_service_name', 'payment_method', 'status', 'remaining_washes', 'purchased_at', 'activated_at', 'expires_at']
@@ -162,6 +162,9 @@ class CustomerPackageSerializer(serializers.ModelSerializer):
 
     def get_customer_name(self, obj):
         return obj.customer.first_name or obj.customer.username
+
+    def get_customer_phone(self, obj):
+        return '' if obj.customer.username.startswith('deleted-') else obj.customer.username
 
 
 class CarSerializer(serializers.ModelSerializer):
@@ -447,6 +450,9 @@ class BookingSerializer(serializers.ModelSerializer):
 
         try:
             with transaction.atomic():
+                customer = User.objects.select_for_update().filter(pk=request.user.pk).first()
+                if customer is None or not customer.is_active:
+                    raise serializers.ValidationError({'detail': 'حساب العميل محذوف أو موقوف.'})
                 if package:
                     package = CustomerPackage.objects.select_for_update().select_related('plan').get(pk=package.pk)
                     if not package.usable or package.customer_id != request.user.id:

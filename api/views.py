@@ -19,6 +19,7 @@ from decimal import Decimal
 from datetime import timedelta
 from pathlib import Path
 from io import BytesIO
+import uuid
 from openpyxl import Workbook
 from django.shortcuts import get_object_or_404, render
 from rest_framework import status
@@ -513,7 +514,7 @@ def manager_dashboard(request):
         'today_completed': today_qs.filter(status='completed').count(),
         'today_revenue': today_qs.filter(status='completed').aggregate(v=Sum('total_price'))['v'] or 0,
         'month_revenue': month_qs.filter(status='completed').aggregate(v=Sum('total_price'))['v'] or 0,
-        'customers': User.objects.filter(is_staff=False).count(),
+        'customers': User.objects.filter(is_staff=False).exclude(username__startswith='deleted-').count(),
         'workers': User.objects.filter(is_staff=True, is_superuser=False, is_active=True).count(),
     })
 
@@ -650,7 +651,9 @@ def manager_package_purchases(request):
         data = serializer.validated_data
         with transaction.atomic():
             # Serializes grants for this customer, including retries of one request.
-            User.objects.select_for_update().get(pk=data['customer'].pk)
+            customer = get_object_or_404(User.objects.select_for_update(), pk=data['customer'].pk)
+            if not customer.is_active or customer.username.startswith('deleted-'):
+                return Response({'detail': 'حساب العميل محذوف أو موقوف.'}, status=400)
             existing = CustomerPackage.objects.filter(grant_reference=data['reference']).first()
             if existing:
                 if existing.customer_id != data['customer'].pk or existing.plan_id != data['plan'].pk:
@@ -821,7 +824,7 @@ def manager_invoices(request):
 
 
 def _customer_rows():
-    customers = User.objects.filter(is_staff=False).annotate(
+    customers = User.objects.filter(is_staff=False).exclude(username__startswith='deleted-').annotate(
         booking_count=Count('booking'),
         completed_count=Count('booking', filter=Q(booking__status='completed')),
         total_spent=Sum('booking__total_price', filter=Q(booking__status='completed')),
@@ -854,6 +857,67 @@ def manager_customers(request):
         'last_booking_at': user.last_booking_at,
     } for user in customers[:1000]]
     return Response(data)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsManager])
+def manager_delete_customer(request, customer_id):
+    with transaction.atomic():
+        customer = get_object_or_404(
+            User.objects.select_for_update().filter(is_staff=False, is_superuser=False)
+            .exclude(username__startswith='deleted-'), pk=customer_id,
+        )
+        packages = list(CustomerPackage.objects.select_for_update().filter(customer=customer))
+        active_bookings = Booking.objects.filter(customer=customer).exclude(
+            status__in=['completed', 'canceled'],
+        ).count()
+        usable_packages = sum(bool(p.usable) for p in packages)
+        booking_count = Booking.objects.filter(customer=customer).count()
+        invoice_count = Invoice.objects.filter(booking__customer=customer).count()
+        if request.method == 'GET':
+            return Response({
+                'name': customer.first_name or customer.username, 'phone': customer.username,
+                'booking_count': booking_count, 'invoice_count': invoice_count,
+                'package_count': len(packages), 'active_bookings': active_bookings,
+                'usable_packages': usable_packages,
+            })
+        if request.data.get('confirm_phone') != customer.username:
+            return Response({'detail': 'اكتب رقم جوال العميل كاملًا لتأكيد حذف الحساب.'}, status=400)
+        reason = request.data.get('reason')
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 500:
+            return Response({'detail': 'اكتب سبب حذف الحساب (حتى ٥٠٠ حرف).'}, status=400)
+        if active_bookings or usable_packages:
+            return Response({
+                'detail': 'يوجد حجز قائم أو رصيد باقة ساري. عالج الحجوزات والباقات أولًا ثم احذف الحساب.',
+            }, status=409)
+        # Revoke both current access and refresh credentials, preserving business history.
+        customer.is_active = False
+        customer.set_unusable_password()
+        customer.save(update_fields=['is_active', 'password'])
+        from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
+        from rest_framework.authtoken.models import Token
+        for token in OutstandingToken.objects.filter(user=customer):
+            BlacklistedToken.objects.get_or_create(token=token)
+        Token.objects.filter(user=customer).delete()
+        Car.objects.filter(user=customer).delete()
+        Location.objects.filter(user=customer).delete()
+        CustomerPackage.objects.filter(customer=customer, status='pending').update(status='revoked')
+        keep_history = bool(booking_count or packages)
+        LogEntry.objects.create(
+            user=request.user, content_type=ContentType.objects.get_for_model(User),
+            object_id=str(customer.pk), object_repr=f'حساب العميل #{customer.pk}',
+            action_flag=CHANGE,
+            change_message='حذف حساب العميل مع حفظ السجلات السابقة. السبب: ' + reason.strip(),
+        )
+        if keep_history:
+            customer.username = 'deleted-' + uuid.uuid4().hex
+            customer.first_name = 'عميل محذوف'
+            customer.last_name = ''
+            customer.email = ''
+            customer.save(update_fields=['username', 'first_name', 'last_name', 'email'])
+        else:
+            customer.delete()
+    return Response({'detail': 'تم حذف حساب العميل.', 'history_preserved': keep_history})
 
 
 @api_view(['GET'])
