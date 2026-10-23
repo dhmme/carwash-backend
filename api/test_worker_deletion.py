@@ -94,3 +94,14 @@ class WorkerDeletionTests(APITestCase):
         self.assertEqual(response.status_code, 400)
         self.worker.refresh_from_db()
         self.assertEqual(self.worker.username, phone)
+
+    def test_redeployment_keeps_admin_password_and_suspension_changes(self):
+        self.worker.is_active = False
+        self.worker.save(update_fields=['is_active'])
+        with patch.dict('os.environ', {'WORKER_PHONE': self.worker.username,
+                                     'WORKER_PASSWORD': 'Old!environment937', 'WORKER_NAME': 'اسم قديم'}):
+            call_command('ensure_staff', stdout=StringIO())
+        self.worker.refresh_from_db()
+        self.assertFalse(self.worker.is_active)
+        self.assertTrue(self.worker.check_password('Strong!password937'))
+        self.assertEqual(self.worker.first_name, 'عامل')
