@@ -2,6 +2,7 @@ import os
 
 from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand
+from api.staff_accounts import DELETED_WORKERS_GROUP
 
 
 class Command(BaseCommand):
@@ -17,6 +18,9 @@ class Command(BaseCommand):
             return
 
         user, created = User.objects.get_or_create(username=phone)
+        if not created and user.groups.filter(name=DELETED_WORKERS_GROUP).exists():
+            self.stdout.write('Worker account skipped: deleted by management.')
+            return
         user.first_name = name
         user.is_staff = True
         user.is_superuser = False
