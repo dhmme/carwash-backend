@@ -13,6 +13,7 @@ from .models import (
     PackagePlan, CustomerPackage,
 )
 from .payment_services import expire_stale_payments, moyasar_mode
+from .booking_availability import lock_shared_team, shared_slot_is_booked
 
 
 BOOKING_WINDOW_DAYS = 3
@@ -107,7 +108,7 @@ class BookingTimeSlotSerializer(serializers.ModelSerializer):
         if not attrs.get('group') and not instance:
             attrs['group'] = ServiceGroup.objects.get(key='car_wash')
         if instance:
-            protected_fields = ('label', 'start_time', 'day_offset')
+            protected_fields = ('group', 'label', 'start_time', 'day_offset')
             changed = any(
                 field in attrs and attrs[field] != getattr(instance, field)
                 for field in protected_fields
@@ -369,9 +370,7 @@ class BookingSerializer(serializers.ModelSerializer):
         if group.key == 'furniture_wash' and not attrs.get('service_items'):
             raise serializers.ValidationError({'service_items': 'اختر خدمة أثاث واحدة على الأقل.'})
 
-        if Booking.objects.filter(service_group=group, date=booking_date, time_slot=time_slot).exclude(
-            status='canceled'
-        ).exists():
+        if shared_slot_is_booked(booking_date, time_slot, group):
             raise serializers.ValidationError({
                 'time_slot': 'هذا الوقت محجوز بالفعل، اختر وقتاً آخر.'
             })
@@ -453,6 +452,11 @@ class BookingSerializer(serializers.ModelSerializer):
                 customer = User.objects.select_for_update().filter(pk=request.user.pk).first()
                 if customer is None or not customer.is_active:
                     raise serializers.ValidationError({'detail': 'حساب العميل محذوف أو موقوف.'})
+                lock_shared_team()
+                if shared_slot_is_booked(validated_data['date'], validated_data['time_slot'], group):
+                    raise serializers.ValidationError({
+                        'time_slot': 'هذا الوقت محجوز بالفعل، اختر وقتاً آخر.'
+                    })
                 if package:
                     package = CustomerPackage.objects.select_for_update().select_related('plan').get(pk=package.pk)
                     if not package.usable or package.customer_id != request.user.id:

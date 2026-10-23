@@ -41,6 +41,7 @@ from .payment_services import (
     verify_moyasar_transaction,
 )
 from .permissions import IsManager
+from .booking_availability import shared_booked_labels
 from .staff_accounts import DELETED_WORKERS_GROUP
 from .throttles import LoginRateThrottle, RegisterRateThrottle
 from .serializers import (
@@ -453,12 +454,10 @@ def booked_slots(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
     group = get_object_or_404(ServiceGroup, key=request.GET.get('group', 'car_wash'))
-    slots = Booking.objects.filter(service_group=group, date=booking_date).exclude(
-        status='canceled'
-    ).values_list('time_slot', flat=True)
     return Response({
-        'booked': list(slots),
+        'booked': shared_booked_labels(booking_date, group),
         'unavailable': past_booking_slots(booking_date, group),
+        'availability_scope': 'shared_team',
     })
 
 
