@@ -3,7 +3,7 @@ from django.contrib.auth.tokens import default_token_generator
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.core.mail import send_mail
-from django.contrib.auth.models import User
+from django.contrib.auth.models import User, Group
 from django.contrib.admin.models import LogEntry, ADDITION, CHANGE
 from django.contrib.contenttypes.models import ContentType
 from django.conf import settings
@@ -41,6 +41,7 @@ from .payment_services import (
     verify_moyasar_transaction,
 )
 from .permissions import IsManager
+from .staff_accounts import DELETED_WORKERS_GROUP
 from .throttles import LoginRateThrottle, RegisterRateThrottle
 from .serializers import (
     BookingSerializer,
@@ -1073,19 +1074,62 @@ def moyasar_callback_view(request, token):
 @permission_classes([IsManager])
 def manager_workers(request):
     if request.method == 'GET':
-        workers = User.objects.filter(is_staff=True, is_superuser=False).order_by('id')
+        workers = User.objects.filter(is_staff=True, is_superuser=False).exclude(
+            groups__name=DELETED_WORKERS_GROUP,
+        ).order_by('id')
         return Response(ManagerStaffSerializer(workers, many=True).data)
+    if not request.data.get('password'):
+        return Response({'password': ['كلمة المرور مطلوبة لإضافة عامل.']}, status=400)
+    # Reusing a deleted number creates a fresh identity: old access tokens stay invalid.
+    with transaction.atomic():
+        archived = User.objects.select_for_update().filter(
+            username=request.data.get('username'), is_staff=True, is_superuser=False,
+            groups__name=DELETED_WORKERS_GROUP,
+        ).first()
+        if archived:
+            archived.username = 'deleted-worker-' + uuid.uuid4().hex
+            archived.save(update_fields=['username'])
+            serializer = ManagerStaffSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            return Response(serializer.data, status=201)
     serializer = ManagerStaffSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     serializer.save()
     return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
-@api_view(['PATCH'])
+@api_view(['PATCH', 'DELETE'])
 @permission_classes([IsManager])
 def manager_worker_detail(request, item_id):
+    if request.method == 'DELETE':
+        with transaction.atomic():
+            worker = get_object_or_404(
+                User.objects.select_for_update(), pk=item_id,
+                is_staff=True, is_superuser=False,
+            )
+            if worker.groups.filter(name=DELETED_WORKERS_GROUP).exists():
+                return Response(status=204)
+            worker.is_active = False
+            worker.set_unusable_password()
+            worker.save(update_fields=['is_active', 'password'])
+            group, _ = Group.objects.get_or_create(name=DELETED_WORKERS_GROUP)
+            worker.groups.add(group)
+            from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
+            from rest_framework.authtoken.models import Token
+            for token in OutstandingToken.objects.filter(user=worker):
+                BlacklistedToken.objects.get_or_create(token=token)
+            Token.objects.filter(user=worker).delete()
+            LogEntry.objects.create(
+                user=request.user, content_type=ContentType.objects.get_for_model(User),
+                object_id=str(worker.pk), object_repr=f'حساب العامل #{worker.pk}',
+                action_flag=CHANGE, change_message='حذف العامل وإيقاف دخوله مع حفظ السجل السابق.',
+            )
+        return Response(status=204)
     try:
-        worker = User.objects.get(pk=item_id, is_staff=True, is_superuser=False)
+        worker = User.objects.exclude(groups__name=DELETED_WORKERS_GROUP).get(
+            pk=item_id, is_staff=True, is_superuser=False,
+        )
     except User.DoesNotExist:
         return Response({'detail': 'العامل غير موجود.'}, status=status.HTTP_404_NOT_FOUND)
     serializer = ManagerStaffSerializer(worker, data=request.data, partial=True)
