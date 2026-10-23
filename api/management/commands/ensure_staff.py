@@ -21,6 +21,9 @@ class Command(BaseCommand):
         if not created and user.groups.filter(name=DELETED_WORKERS_GROUP).exists():
             self.stdout.write('Worker account skipped: deleted by management.')
             return
+        if not created:
+            self.stdout.write('Worker account skipped: existing accounts are managed through administration.')
+            return
         user.first_name = name
         user.is_staff = True
         user.is_superuser = False
