@@ -10,6 +10,7 @@ from django.db import IntegrityError, transaction as db_transaction
 from django.utils import timezone
 
 from .models import Booking, Invoice, PaymentTransaction
+from .booking_availability import lock_shared_team, shared_slot_is_booked
 
 
 class PaymentVerificationError(Exception):
@@ -143,6 +144,7 @@ def verify_moyasar_transaction(transaction_token, payment_id):
         raise PaymentVerificationError('رقم العملية في استجابة ميسر غير مطابق.')
 
     with db_transaction.atomic():
+        lock_shared_team()
         payment = PaymentTransaction.objects.select_for_update().select_related(
             'booking__service'
         ).get(public_token=transaction_token)
@@ -166,10 +168,10 @@ def verify_moyasar_transaction(transaction_token, payment_id):
             payment.status = 'paid'
             payment.paid_at = timezone.now()
             if booking.status == 'canceled':
-                slot_taken = Booking.objects.filter(
-                    date=booking.date,
-                    time_slot=booking.time_slot,
-                ).exclude(pk=booking.pk).exclude(status='canceled').exists()
+                slot_taken = shared_slot_is_booked(
+                    booking.date, booking.time_slot, booking.service_group_id,
+                    exclude_booking_id=booking.pk,
+                )
                 if slot_taken:
                     payment.save()
                     return payment
