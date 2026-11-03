@@ -1,5 +1,6 @@
 from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView
+from .package_management import manager_adjust_package, manager_package_history, manager_package_export
 from .views import (
     hello_view,
     service_list,
@@ -101,6 +102,9 @@ urlpatterns = [
     path('manager/package-purchases/', manager_package_purchases),
     path('manager/package-purchases/<int:item_id>/', manager_package_purchase_detail),
     path('manager/package-purchases/<int:item_id>/revoke/', manager_revoke_package),
+    path('manager/package-purchases/<int:item_id>/adjust/', manager_adjust_package),
+    path('manager/package-purchases/<int:item_id>/history/', manager_package_history),
+    path('manager/packages/<int:item_id>/export/', manager_package_export),
     path('manager/time-slots/', manager_time_slots),
     path('manager/time-slots/<int:item_id>/', manager_time_slot_detail),
     path('manager/bookings/', manager_bookings),

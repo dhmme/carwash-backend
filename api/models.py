@@ -93,6 +93,7 @@ class PackagePlan(models.Model):
     validity_days = models.PositiveSmallIntegerField(default=60)
     is_active = models.BooleanField(default=True)
     ordering = models.PositiveSmallIntegerField(default=0)
+    is_archived = models.BooleanField(default=False)
 
     class Meta:
         ordering = ['ordering', 'id']
@@ -112,13 +113,60 @@ class CustomerPackage(models.Model):
     activated_at = models.DateTimeField(null=True, blank=True)
     expires_at = models.DateTimeField(null=True, blank=True)
     grant_reference = models.UUIDField(null=True, blank=True, unique=True, editable=False)
+    plan_snapshot = models.JSONField(default=dict, db_default={}, editable=False)
+    included_service_snapshot = models.ForeignKey(
+        Service, on_delete=models.PROTECT, null=True, editable=False,
+        related_name='purchased_packages',
+    )
 
     class Meta:
         ordering = ['-id']
 
+    def save(self, *args, **kwargs):
+        if not self.plan_snapshot or not self.included_service_snapshot_id:
+            self.plan_snapshot = self.purchase_terms
+            self.included_service_snapshot_id = self.purchased_service_id
+            if kwargs.get('update_fields') is not None:
+                kwargs['update_fields'] = set(kwargs['update_fields']) | {'plan_snapshot', 'included_service_snapshot'}
+        return super().save(*args, **kwargs)
+
+    @property
+    def purchase_terms(self):
+        return self.plan_snapshot or {
+            'name': self.plan.name, 'washes_count': self.plan.washes_count,
+            'price': str(self.plan.price), 'validity_days': self.plan.validity_days,
+            'included_service_name': self.plan.included_service.name,
+        }
+
+    @property
+    def purchased_service_id(self):
+        return self.included_service_snapshot_id or self.plan.included_service_id
+
+    @property
+    def effective_status(self):
+        if self.status not in ['active', 'expired']:
+            return self.status
+        if self.status == 'expired' or not self.expires_at or self.expires_at <= timezone.now():
+            return 'expired'
+        return 'exhausted' if self.remaining_washes == 0 else 'active'
+
     @property
     def usable(self):
         return self.status == 'active' and self.remaining_washes > 0 and self.expires_at and self.expires_at > timezone.now()
+
+
+class PackageAdjustment(models.Model):
+    package = models.ForeignKey(CustomerPackage, on_delete=models.PROTECT, related_name='adjustments')
+    actor = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+    action = models.CharField(max_length=20)
+    reason = models.CharField(max_length=500)
+    before = models.JSONField(default=dict)
+    after = models.JSONField(default=dict)
+    reference = models.UUIDField(null=True, blank=True, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-id']
 
 
 class BookingTimeSlot(models.Model):

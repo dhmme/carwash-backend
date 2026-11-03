@@ -138,31 +138,69 @@ class PackagePlanSerializer(serializers.ModelSerializer):
     included_service_name = serializers.CharField(source='included_service.name', read_only=True)
     class Meta:
         model = PackagePlan
-        fields = ['id', 'name', 'washes_count', 'price', 'included_service', 'included_service_name', 'validity_days', 'is_active', 'ordering']
+        fields = ['id', 'name', 'washes_count', 'price', 'included_service', 'included_service_name', 'validity_days', 'is_active', 'ordering', 'is_archived']
+        read_only_fields = ['is_archived']
+
+    def validate(self, attrs):
+        for field in ['washes_count', 'validity_days']:
+            if field in attrs and not 1 <= attrs[field] <= 10000:
+                raise serializers.ValidationError({field: 'أدخل عددًا من ١ إلى ١٠٠٠٠.'})
+        if attrs.get('price', Decimal('0')) < 0:
+            raise serializers.ValidationError({'price': 'السعر لا يمكن أن يكون سالبًا.'})
+        if attrs.get('included_service') and (not attrs['included_service'].group_id or attrs['included_service'].group.key != 'car_wash'):
+            raise serializers.ValidationError({'included_service': 'اختر خدمة غسيل سيارات.'})
+        if self.instance and self.instance.is_archived and attrs.get('is_active'):
+            raise serializers.ValidationError({'is_active': 'الباقة مؤرشفة. استعدها من الأرشيف أولًا.'})
+        return attrs
+
+
+class ManagerPackagePlanSerializer(PackagePlanSerializer):
+    customer_count = serializers.IntegerField(read_only=True, default=0)
+    buyers_count = serializers.IntegerField(read_only=True, default=0)
+    purchase_count = serializers.IntegerField(read_only=True, default=0)
+    grants_count = serializers.IntegerField(read_only=True, default=0)
+    active_count = serializers.IntegerField(read_only=True, default=0)
+    pending_count = serializers.IntegerField(read_only=True, default=0)
+    expired_count = serializers.IntegerField(read_only=True, default=0)
+    exhausted_count = serializers.IntegerField(read_only=True, default=0)
+    class Meta(PackagePlanSerializer.Meta):
+        fields = PackagePlanSerializer.Meta.fields + [
+            'customer_count', 'buyers_count', 'purchase_count', 'grants_count',
+            'active_count', 'pending_count', 'expired_count', 'exhausted_count',
+        ]
 
 
 class ManagerPackageGrantSerializer(serializers.Serializer):
     customer = serializers.PrimaryKeyRelatedField(
         queryset=User.objects.filter(is_active=True, is_staff=False, is_superuser=False),
     )
-    plan = serializers.PrimaryKeyRelatedField(queryset=PackagePlan.objects.filter(is_active=True))
+    plan = serializers.PrimaryKeyRelatedField(queryset=PackagePlan.objects.filter(is_active=True, is_archived=False))
     reference = serializers.UUIDField()
     reason = serializers.CharField(max_length=500)
 
 
 class CustomerPackageSerializer(serializers.ModelSerializer):
-    plan_name = serializers.CharField(source='plan.name', read_only=True)
-    included_service = serializers.IntegerField(source='plan.included_service_id', read_only=True)
-    included_service_name = serializers.CharField(source='plan.included_service.name', read_only=True)
+    plan_name = serializers.CharField(source='purchase_terms.name', read_only=True)
+    included_service = serializers.IntegerField(source='purchased_service_id', read_only=True)
+    included_service_name = serializers.CharField(source='purchase_terms.included_service_name', read_only=True)
+    washes_count = serializers.IntegerField(source='purchase_terms.washes_count', read_only=True)
+    price = serializers.CharField(source='purchase_terms.price', read_only=True)
+    validity_days = serializers.IntegerField(source='purchase_terms.validity_days', read_only=True)
+    effective_status = serializers.CharField(read_only=True)
+    used_washes = serializers.SerializerMethodField()
+    plan_archived = serializers.BooleanField(source='plan.is_archived', read_only=True)
     customer_name = serializers.SerializerMethodField()
     customer_phone = serializers.SerializerMethodField()
     class Meta:
         model = CustomerPackage
-        fields = ['id', 'customer', 'customer_name', 'customer_phone', 'plan', 'plan_name', 'included_service', 'included_service_name', 'payment_method', 'status', 'remaining_washes', 'purchased_at', 'activated_at', 'expires_at']
+        fields = ['id', 'customer', 'customer_name', 'customer_phone', 'plan', 'plan_name', 'included_service', 'included_service_name', 'payment_method', 'status', 'remaining_washes', 'purchased_at', 'activated_at', 'expires_at', 'washes_count', 'price', 'validity_days', 'effective_status', 'used_washes', 'plan_archived']
         read_only_fields = ['customer', 'status', 'remaining_washes', 'purchased_at', 'activated_at', 'expires_at']
 
     def get_customer_name(self, obj):
         return obj.customer.first_name or obj.customer.username
+
+    def get_used_washes(self, obj):
+        return getattr(obj, 'used_washes_count', None) if hasattr(obj, 'used_washes_count') else obj.bookings.filter(package_wash_used=True).count()
 
     def get_customer_phone(self, obj):
         return '' if obj.customer.username.startswith('deleted-') else obj.customer.username
@@ -344,7 +382,7 @@ class BookingSerializer(serializers.ModelSerializer):
         if package:
             if package.customer_id != request.user.id or not package.usable:
                 raise serializers.ValidationError({'customer_package': 'الباقة غير متاحة أو انتهت صلاحيتها.'})
-            if group.key != 'car_wash' or not service or package.plan.included_service_id != service.id:
+            if group.key != 'car_wash' or not service or package.purchased_service_id != service.id:
                 raise serializers.ValidationError({'customer_package': 'هذه الباقة لا تشمل خدمة الغسيل المختارة.'})
 
         payment_code = attrs.get('payment_method', 'cash')
@@ -458,7 +496,7 @@ class BookingSerializer(serializers.ModelSerializer):
                         'time_slot': 'هذا الوقت محجوز بالفعل، اختر وقتاً آخر.'
                     })
                 if package:
-                    package = CustomerPackage.objects.select_for_update().select_related('plan').get(pk=package.pk)
+                    package = CustomerPackage.objects.select_for_update(of=('self',)).select_related('plan').get(pk=package.pk)
                     if not package.usable or package.customer_id != request.user.id:
                         raise serializers.ValidationError({'customer_package': 'رصيد الباقة غير متاح.'})
                     package.remaining_washes -= 1
