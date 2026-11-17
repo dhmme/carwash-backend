@@ -160,6 +160,10 @@ def verify_moyasar_transaction(transaction_token, payment_id):
         if str(metadata.get('booking_id', '')) != str(booking.id):
             raise PaymentVerificationError('عملية الدفع لا تخص هذا الطلب.')
 
+        # A later callback must not change a settled payment or its booking.
+        if payment.status == 'paid':
+            return payment
+
         payment.provider_payment_id = clean_payment_id
         payment.provider_response = _safe_provider_response(payload)
         provider_status = payload.get('status')
