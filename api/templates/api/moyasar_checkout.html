@@ -23,6 +23,8 @@
 
       {% if payment.status == 'paid' %}
         <div class="notice">هذه العملية مدفوعة ومؤكدة بالفعل.</div>
+      {% elif payment.status == 'refunded' %}
+        <div class="notice">تم استرجاع مبلغ هذه العملية إلى وسيلة الدفع الأصلية.</div>
       {% elif payment.status == 'expired' %}
         <div class="notice error">انتهت مهلة الدفع. عد إلى التطبيق واختر موعدًا جديدًا.</div>
       {% elif payment.status == 'failed' %}

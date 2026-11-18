@@ -97,3 +97,11 @@ class RefundTests(TestCase):
         with patch('api.refunds.fetch_moyasar_payment',return_value=bad),patch('api.refunds.post_refund') as post:
             with self.assertRaises(RefundError): cancel_purchase(actor=self.user,booking_id=self.booking.pk)
             post.assert_not_called()
+
+    def test_refunded_checkout_cannot_offer_a_second_payment(self):
+        from django.test import Client
+        self.payment.status='refunded'; self.payment.save()
+        response=Client().get(f'/api/payments/{self.payment.public_token}/checkout/')
+        self.assertEqual(response.status_code,200)
+        self.assertNotContains(response, 'class="mysr-form"')
+        self.assertContains(response, 'تم استرجاع مبلغ')
