@@ -143,7 +143,7 @@ def verify_moyasar_transaction(transaction_token, payment_id):
         if payment.provider_payment_id and payment.provider_payment_id != clean_payment_id:
             raise PaymentVerificationError('رقم العملية لا يطابق محاولة الدفع الحالية.')
         _validate_purchase(payment, payload)
-        if payment.status == 'paid':
+        if payment.status in ['paid', 'refunded']:
             return payment
 
         payment.provider_payment_id = clean_payment_id

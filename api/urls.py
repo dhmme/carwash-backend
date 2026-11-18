@@ -2,7 +2,7 @@ from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView
 from .package_management import manager_adjust_package, manager_package_history, manager_package_export
 from .views import (
-    hello_view,
+    hello_view, refund_customer_package,
     service_list,
     car_list_create,
     car_detail,
@@ -40,6 +40,7 @@ from .views import (
 )
 
 urlpatterns = [
+    path('customer-packages/<int:item_id>/refund/', refund_customer_package),
     path('payments/webhook/', moyasar_webhook_view, name='moyasar-webhook'),
     path('hello/', hello_view, name='hello'),
     path('auth/register/', register_view, name='register'),

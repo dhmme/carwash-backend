@@ -103,7 +103,7 @@ class PackagePlan(models.Model):
 
 
 class CustomerPackage(models.Model):
-    STATUS_CHOICES = [('pending', 'بانتظار الاعتماد'), ('active', 'نشطة'), ('rejected', 'مرفوضة'), ('expired', 'منتهية'), ('revoked', 'ملغاة من الإدارة')]
+    STATUS_CHOICES = [('refund_pending', 'قيد الاسترجاع'), ('pending', 'بانتظار الاعتماد'), ('active', 'نشطة'), ('rejected', 'مرفوضة'), ('expired', 'منتهية'), ('revoked', 'ملغاة من الإدارة')]
     customer = models.ForeignKey(User, on_delete=models.CASCADE, related_name='wash_packages')
     plan = models.ForeignKey(PackagePlan, on_delete=models.PROTECT, related_name='purchases')
     payment_method = models.CharField(max_length=50, default='bank_transfer')
@@ -233,6 +233,7 @@ class Location(models.Model):
 
 class Booking(models.Model):
     STATUS_CHOICES = [
+        ('refund_pending', 'Refund pending'),
         ('pending', 'Pending'),
         ('accepted', 'Accepted'),
         ('on_the_way', 'On the way'),
@@ -320,6 +321,7 @@ class PaymentTransaction(models.Model):
     STATUS_CHOICES = [
         ('pending', 'بانتظار الدفع'),
         ('paid', 'مدفوع'),
+        ('refunded', 'مسترد'),
         ('failed', 'فشل الدفع'),
         ('expired', 'انتهت مهلة الدفع'),
     ]
@@ -446,3 +448,12 @@ class AuditLog(models.Model):
 
     def __str__(self):
         return f'{self.user_id or "anonymous"} {self.method} {self.path}'
+
+
+class PaymentRefund(models.Model):
+    payment = models.OneToOneField(PaymentTransaction, on_delete=models.PROTECT, related_name='refund')
+    actor = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+    state = models.CharField(max_length=20, default='processing')
+    original_status = models.CharField(max_length=20)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True)

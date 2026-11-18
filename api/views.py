@@ -41,8 +41,9 @@ from .payment_services import (
     record_moyasar_reference,
     verify_moyasar_transaction,
 )
+from .refunds import cancel_purchase, RefundError
 from .permissions import IsManager
-from .booking_availability import shared_booked_labels
+from .booking_availability import shared_booked_labels, lock_shared_team
 from .staff_accounts import DELETED_WORKERS_GROUP
 from .throttles import LoginRateThrottle, RegisterRateThrottle
 from .serializers import (
@@ -69,30 +70,6 @@ from .package_management import (
     package_catalog_queryset, paginated_package_purchases, package_state,
     record_package_adjustment, freeze_legacy_package_terms,
 )
-
-
-def _cancel_booking(booking, *, manager=False):
-    if booking.status == 'canceled':
-        return None
-    if booking.status == 'completed':
-        return 'لا يمكن إلغاء طلب مكتمل.'
-    if not manager and booking.status not in ['pending', 'accepted']:
-        return 'لا يمكن إلغاء الطلب بعد بدء العامل في تنفيذه.'
-    # Accessing a missing reverse one-to-one relation raises
-    # RelatedObjectDoesNotExist, even when getattr has a default. Cash/POS
-    # bookings normally have no PaymentTransaction, so query explicitly.
-    payment = PaymentTransaction.objects.filter(booking=booking).first()
-    if payment and payment.status == 'paid':
-        return 'الطلب مدفوع إلكترونيًا ويجب معالجة الاسترجاع قبل الإلغاء.'
-    booking.status = 'canceled'
-    booking.save(update_fields=['status'])
-    if booking.package_wash_used and booking.customer_package_id:
-        package = CustomerPackage.objects.select_for_update().get(pk=booking.customer_package_id)
-        package.remaining_washes += 1
-        package.save(update_fields=['remaining_washes'])
-        booking.package_wash_used = False
-        booking.save(update_fields=['package_wash_used'])
-    return None
 
 
 @api_view(['GET'])
@@ -394,16 +371,12 @@ def booking_list_create(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def cancel_booking(request, booking_id):
-    with transaction.atomic():
-        booking = get_object_or_404(
-            Booking.objects.select_for_update(),
-            pk=booking_id,
-            customer=request.user,
-        )
-        error = _cancel_booking(booking)
-    if error:
-        return Response({'detail': error}, status=status.HTTP_400_BAD_REQUEST)
-    return Response({'id': booking.id, 'status': booking.status})
+    booking = get_object_or_404(Booking, pk=booking_id, customer=request.user)
+    try:
+        detail = cancel_purchase(actor=request.user, booking_id=booking.pk)
+    except RefundError as exc:
+        return Response({'detail': str(exc)}, status=400)
+    return Response({'id': booking.id, 'status': 'canceled', 'detail': detail})
 
 
 @api_view(['PATCH'])
@@ -481,14 +454,16 @@ def booked_slots(request):
 def worker_bookings(request):
     date = request.GET.get('date') or timezone.localdate()
     bookings = Booking.objects.filter(date=date).exclude(status='pending').exclude(
-        status__in=['completed', 'canceled']
+        status__in=['completed', 'canceled', 'refund_pending']
     ).select_related('service', 'service_group', 'car', 'customer', 'payment').order_by('time_slot')
     return Response(WorkerBookingSerializer(bookings, many=True).data)
 
 
 @api_view(['PATCH'])
 @permission_classes([IsAdminUser])
+@transaction.atomic
 def update_booking_status(request, booking_id):
+    lock_shared_team()
     try:
         booking = Booking.objects.get(pk=booking_id)
     except Booking.DoesNotExist:
@@ -497,12 +472,14 @@ def update_booking_status(request, booking_id):
             status=status.HTTP_404_NOT_FOUND,
         )
     requested_status = request.data.get('status')
+    if requested_status in ['canceled', 'refund_pending', 'pending']:
+        return Response({'detail': 'استخدم زر الإلغاء لمعالجة الاسترجاع؛ لا يمكن تعديل الحالة مباشرة.'}, status=400)
     if not request.user.is_superuser and requested_status != 'completed':
         return Response(
             {'status': ['العامل يستطيع فقط إنهاء طلب الغسيل.']},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    if booking.status in ['completed', 'canceled']:
+    if booking.status in ['completed', 'canceled', 'refund_pending']:
         return Response(
             {'status': ['لا يمكن تعديل طلب منتهٍ أو ملغي.']},
             status=status.HTTP_400_BAD_REQUEST,
@@ -840,15 +817,12 @@ def manager_bookings(request):
 @api_view(['POST'])
 @permission_classes([IsManager])
 def manager_cancel_booking(request, booking_id):
-    with transaction.atomic():
-        booking = get_object_or_404(
-            Booking.objects.select_for_update(),
-            pk=booking_id,
-        )
-        error = _cancel_booking(booking, manager=True)
-    if error:
-        return Response({'detail': error}, status=status.HTTP_400_BAD_REQUEST)
-    return Response({'id': booking.id, 'status': booking.status})
+    booking = get_object_or_404(Booking, pk=booking_id)
+    try:
+        detail = cancel_purchase(actor=request.user, booking_id=booking.pk, manager=True)
+    except RefundError as exc:
+        return Response({'detail': str(exc)}, status=400)
+    return Response({'id': booking.id, 'status': 'canceled', 'detail': detail})
 
 
 @api_view(['GET'])
@@ -1104,7 +1078,7 @@ def moyasar_callback_view(request, token):
     payment_id = request.GET.get('id', '')
     result = 'error'
     title = 'تعذر تأكيد الدفع'
-    message = 'لم نتمكن من التحقق من العملية. يمكنك المحاولة مرة أخرى من صفحة طلباتي.'
+    message = 'تعذر تأكيد نتيجة العملية. إذا خُصم المبلغ فلا تعِد الدفع، وتواصل مع الدعم برقم الطلب.'
     try:
         payment = verify_moyasar_transaction(token, payment_id)
         if payment.status == 'paid' and payment.customer_package_id and payment.customer_package.status == 'active':
@@ -1118,6 +1092,10 @@ def moyasar_callback_view(request, token):
         elif payment.status == 'paid':
             title = 'تم الدفع ويحتاج الطلب إلى مراجعة'
             message = 'استلمنا الدفعة، لكن الموعد يحتاج مراجعة من الإدارة. لن يتم تكرار الخصم.'
+        elif payment.status == 'refunded':
+            result = 'success'
+            title = 'تم استرجاع المبلغ'
+            message = 'تم رد المبلغ إلى وسيلة الدفع الأصلية. مدة ظهوره تعتمد على البنك.'
         elif payment.status == 'failed':
             title = 'لم تنجح عملية الدفع'
             message = 'لم يتم خصم المبلغ. عد إلى طلباتك واختر موعدًا جديدًا.'
@@ -1314,3 +1292,14 @@ def moyasar_webhook_view(request):
         # Non-success lets Moyasar retry delivery after transient verification failures.
         return Response({'detail': 'Payment could not be verified'}, status=503)
     return Response({'received': True})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def refund_customer_package(request, item_id):
+    item = get_object_or_404(CustomerPackage, pk=item_id, customer=request.user)
+    try:
+        detail = cancel_purchase(actor=request.user, package_id=item.pk)
+    except RefundError as exc:
+        return Response({'detail': str(exc)}, status=400)
+    return Response({'detail': detail})
