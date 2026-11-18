@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>الدفع الإلكتروني | Code Care</title>
-  <link rel="stylesheet" href="https://cdn.moyasar.com/mpf/1.14.0/moyasar.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/moyasar-payment-form@2.3.0/dist/moyasar.css">
   <style>
     *{box-sizing:border-box} body{margin:0;min-height:100vh;background:#071d27;color:#eefaff;font-family:Tahoma,Arial,sans-serif}
     .wrap{width:min(560px,calc(100% - 28px));margin:34px auto}.brand{text-align:center;margin-bottom:22px}.brand h1{margin:0;color:#39bce8}.brand p{margin:7px 0;color:#9cc5d3}
@@ -17,8 +17,8 @@
   <main class="wrap">
     <div class="brand"><h1>Code Care</h1><p>عناية بكل تفصيل</p></div>
     <section class="card">
-      <div class="summary"><span>الخدمة</span><strong>{{ booking.service.name }}</strong></div>
-      <div class="summary"><span>رقم الطلب</span><strong>#{{ booking.id }}</strong></div>
+      <div class="summary"><span>الخدمة</span><strong>{% if booking %}{{ booking.service_group.name }}{% else %}{{ payment.customer_package.purchase_terms.name }}{% endif %}</strong></div>
+      <div class="summary"><span>رقم الطلب</span><strong>#{% if booking %}{{ booking.id }}{% else %}{{ payment.customer_package_id }}{% endif %}</strong></div>
       <div class="summary"><span>الإجمالي</span><strong class="total">{{ payment.amount }} ر.س</strong></div>
 
       {% if payment.status == 'paid' %}
@@ -28,13 +28,13 @@
       {% elif payment.status == 'failed' %}
         <div class="notice error">لم تنجح محاولة الدفع السابقة. عد إلى التطبيق واختر موعدًا جديدًا.</div>
       {% elif not configured %}
-        <div class="notice error">الدفع التجريبي لم يُفعّل بعد. يلزم إضافة مفاتيح ميسر في إعدادات الخادم.</div>
+        <div class="notice error">الدفع الإلكتروني غير متاح حاليًا.</div>
       {% else %}
-        <div class="notice">هذه بيئة تجريبية حاليًا، ولن يتم خصم مبلغ حقيقي.</div>
+        {% if test_mode %}<div class="notice">دفع تجريبي، ولن يتم خصم مبلغ حقيقي.</div>{% endif %}
         <div class="mysr-form"></div>
         {{ payment_config|json_script:"moyasar-payment-config" }}
         {{ reference_url|json_script:"moyasar-reference-url" }}
-        <script src="https://cdn.moyasar.com/mpf/1.14.0/moyasar.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/moyasar-payment-form@2.3.0/dist/moyasar.umd.min.js"></script>
         <script>
           const paymentConfig = JSON.parse(document.getElementById('moyasar-payment-config').textContent);
           const referenceUrl = JSON.parse(document.getElementById('moyasar-reference-url').textContent);

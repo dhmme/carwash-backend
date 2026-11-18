@@ -189,7 +189,7 @@ MOYASAR_SECRET_KEY = os.environ.get('MOYASAR_SECRET_KEY', '')
 MOYASAR_API_URL = os.environ.get('MOYASAR_API_URL', 'https://api.moyasar.com/v1').rstrip('/')
 CUSTOMER_APP_URL = os.environ.get(
     'CUSTOMER_APP_URL',
-    'https://carwash-customer-app.vercel.app',
+    'https://www.codecare.sa',
 ).rstrip('/')
 
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
@@ -200,3 +200,10 @@ EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', 'code.care11@gmail.com')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER)
 PASSWORD_RESET_TIMEOUT = 60 * 60
+
+PAYMENT_CHECKOUT_ORIGIN = os.environ.get('PAYMENT_CHECKOUT_ORIGIN', 'https://www.codecare.sa').rstrip('/')
+MOYASAR_SAMSUNG_SERVICE_ID = os.environ.get('MOYASAR_SAMSUNG_SERVICE_ID', '')
+MOYASAR_ENABLED_METHODS = os.environ.get('MOYASAR_ENABLED_METHODS', 'creditcard,applepay').split(',')
+
+MOYASAR_WEBHOOK_SECRET = os.environ.get('MOYASAR_WEBHOOK_SECRET', '')
+MOYASAR_GOOGLE_MERCHANT_ID = os.environ.get('MOYASAR_GOOGLE_MERCHANT_ID', '')

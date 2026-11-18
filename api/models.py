@@ -328,7 +328,23 @@ class PaymentTransaction(models.Model):
         Booking,
         on_delete=models.CASCADE,
         related_name='payment',
+        null=True,
+        blank=True,
     )
+    customer_package = models.OneToOneField(
+        CustomerPackage, on_delete=models.PROTECT, related_name='payment',
+        null=True, blank=True,
+    )
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(models.Q(booking__isnull=False, customer_package__isnull=True) |
+                           models.Q(booking__isnull=True, customer_package__isnull=False)),
+                name='payment_has_one_purchase',
+            ),
+        ]
+
     public_token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     provider = models.CharField(max_length=30, default='moyasar')
     provider_payment_id = models.CharField(

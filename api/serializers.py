@@ -188,16 +188,28 @@ class CustomerPackageSerializer(serializers.ModelSerializer):
     validity_days = serializers.IntegerField(source='purchase_terms.validity_days', read_only=True)
     effective_status = serializers.CharField(read_only=True)
     used_washes = serializers.SerializerMethodField()
+    payment_checkout_url = serializers.SerializerMethodField()
+    payment_status = serializers.SerializerMethodField()
     plan_archived = serializers.BooleanField(source='plan.is_archived', read_only=True)
     customer_name = serializers.SerializerMethodField()
     customer_phone = serializers.SerializerMethodField()
     class Meta:
         model = CustomerPackage
-        fields = ['id', 'customer', 'customer_name', 'customer_phone', 'plan', 'plan_name', 'included_service', 'included_service_name', 'payment_method', 'status', 'remaining_washes', 'purchased_at', 'activated_at', 'expires_at', 'washes_count', 'price', 'validity_days', 'effective_status', 'used_washes', 'plan_archived']
+        fields = ['id', 'customer', 'customer_name', 'customer_phone', 'plan', 'plan_name', 'included_service', 'included_service_name', 'payment_method', 'status', 'remaining_washes', 'purchased_at', 'activated_at', 'expires_at', 'washes_count', 'price', 'validity_days', 'effective_status', 'used_washes', 'plan_archived', 'payment_checkout_url', 'payment_status']
         read_only_fields = ['customer', 'status', 'remaining_washes', 'purchased_at', 'activated_at', 'expires_at']
 
     def get_customer_name(self, obj):
         return obj.customer.first_name or obj.customer.username
+
+    def get_payment_checkout_url(self, obj):
+        payment = getattr(obj, 'payment', None)
+        if payment and payment.status == 'pending' and obj.status == 'pending':
+            return f'{settings.PAYMENT_CHECKOUT_ORIGIN}/pay/{payment.public_token}/checkout/'
+        return ''
+
+    def get_payment_status(self, obj):
+        payment = getattr(obj, 'payment', None)
+        return payment.status if payment else 'pay_on_service'
 
     def get_used_washes(self, obj):
         return getattr(obj, 'used_washes_count', None) if hasattr(obj, 'used_washes_count') else obj.bookings.filter(package_wash_used=True).count()
@@ -398,10 +410,6 @@ class BookingSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 'payment_method': 'الدفع الإلكتروني غير مفعّل حاليًا.'
             })
-        if package and payment_method.requires_gateway:
-            raise serializers.ValidationError({
-                'payment_method': 'استخدام رصيد الباقة متاح مع طرق الدفع غير الإلكترونية للخدمات الإضافية.'
-            })
 
         if group.key == 'car_wash' and not service:
             raise serializers.ValidationError({'service': 'اختر خدمة الغسيل.'})
@@ -501,7 +509,7 @@ class BookingSerializer(serializers.ModelSerializer):
                         raise serializers.ValidationError({'customer_package': 'رصيد الباقة غير متاح.'})
                     package.remaining_washes -= 1
                     package.save(update_fields=['remaining_washes'])
-                is_online = validated_data.get('payment_method') == 'online'
+                is_online = validated_data.get('payment_method') == 'online' and total_price > 0
                 booking = Booking.objects.create(
                     customer=request.user,
                     status='pending' if is_online else 'accepted',
@@ -551,7 +559,7 @@ class BookingSerializer(serializers.ModelSerializer):
         if obj.payment_method != 'online':
             return 'pay_on_service'
         payment = getattr(obj, 'payment', None)
-        return payment.status if payment else 'pending'
+        return payment.status if payment else ('paid' if obj.total_price == 0 and obj.status in ['accepted', 'completed'] else 'pending')
 
     def get_payment_checkout_url(self, obj):
         if obj.payment_method != 'online':
@@ -559,9 +567,7 @@ class BookingSerializer(serializers.ModelSerializer):
         payment = getattr(obj, 'payment', None)
         if not payment or payment.status != 'pending':
             return ''
-        request = self.context.get('request')
-        path = reverse('moyasar-checkout', kwargs={'token': payment.public_token})
-        return request.build_absolute_uri(path) if request else path
+        return f'{settings.PAYMENT_CHECKOUT_ORIGIN}/pay/{payment.public_token}/checkout/'
 
 
 class BookingStatusSerializer(serializers.ModelSerializer):
@@ -623,7 +629,7 @@ class WorkerBookingSerializer(serializers.ModelSerializer):
         if obj.payment_method != 'online':
             return 'pay_on_service'
         payment = getattr(obj, 'payment', None)
-        return payment.status if payment else 'pending'
+        return payment.status if payment else ('paid' if obj.total_price == 0 and obj.status in ['accepted', 'completed'] else 'pending')
 
     def get_service_name(self, obj):
         if obj.service_items:

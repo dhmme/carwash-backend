@@ -12,6 +12,7 @@ from django.db.models import Count, Max, Q, Sum
 from django.http import FileResponse, HttpResponse
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.crypto import constant_time_compare
 from django.utils.dateparse import parse_date
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
@@ -284,12 +285,20 @@ def customer_packages(request):
         items = CustomerPackage.objects.filter(customer=request.user).select_related('plan__included_service')
         return Response(CustomerPackageSerializer(items, many=True).data)
     payment_code = str(request.data.get('payment_method', 'bank_transfer'))
-    if not PaymentMethod.objects.filter(code=payment_code, is_active=True, requires_gateway=False).exists():
+    method = PaymentMethod.objects.filter(code=payment_code, is_active=True).first()
+    if method is None or (method.requires_gateway and (payment_code != 'online' or moyasar_mode() == 'disabled')):
         return Response({'payment_method': ['طريقة الدفع غير متاحة.']}, status=status.HTTP_400_BAD_REQUEST)
     with transaction.atomic():
         get_object_or_404(User.objects.select_for_update(), pk=request.user.pk, is_active=True)
         plan = get_object_or_404(PackagePlan.objects.select_for_update(), pk=request.data.get('plan'), is_active=True, is_archived=False)
+        if method.requires_gateway and plan.price <= 0:
+            return Response({'detail': 'سعر الباقة غير صالح للدفع الإلكتروني.'}, status=400)
         item = CustomerPackage.objects.create(customer=request.user, plan=plan, payment_method=payment_code)
+        if method.requires_gateway:
+            PaymentTransaction.objects.create(
+                customer_package=item, amount=Decimal(item.purchase_terms['price']),
+                expires_at=timezone.now() + timedelta(minutes=30),
+            )
     return Response(CustomerPackageSerializer(item).data, status=status.HTTP_201_CREATED)
 
 
@@ -753,6 +762,10 @@ def manager_package_purchase_detail(request, item_id):
         if item.status != 'pending':
             return Response({'detail': 'يمكن اعتماد أو رفض الطلبات المنتظرة فقط. امنح باقة جديدة عند الحاجة.'}, status=400)
         before = package_state(item)
+        if requested == 'active' and item.payment_method == 'online':
+            payment = PaymentTransaction.objects.filter(customer_package=item, status='paid').first()
+            if payment is None:
+                return Response({'detail': 'بانتظار التحقق من الدفع الإلكتروني.'}, status=400)
         if requested == 'active':
             item.status = 'active'
             item.remaining_washes = item.purchase_terms['washes_count']
@@ -1030,23 +1043,44 @@ def moyasar_checkout_view(request, token):
     payment_config = {
         'amount': int(payment.amount * Decimal('100')),
         'currency': payment.currency,
-        'description': f'Code Care booking #{booking.id}',
+        'description': f'Code Care booking #{booking.id}' if booking else f'Code Care package #{payment.customer_package_id}',
         'publishable_api_key': publishable_key,
         'callback_url': callback_url,
         'supported_networks': ['mada', 'visa', 'mastercard'],
-        'methods': ['creditcard'],
+        'methods': [method.strip() for method in settings.MOYASAR_ENABLED_METHODS
+                    if method.strip() in ['creditcard', 'applepay', 'stcpay']
+                    or (method.strip() == 'samsungpay' and settings.MOYASAR_SAMSUNG_SERVICE_ID)],
+        'apple_pay': {
+            'country': 'SA', 'label': 'Code Care',
+            'validate_merchant_url': 'https://api.moyasar.com/v1/applepay/initiate',
+        },
         'language': 'ar',
         'fixed_width': False,
         'metadata': {
-            'booking_id': str(booking.id),
+            'booking_id': str(booking.id) if booking else '',
+            'customer_package_id': str(payment.customer_package_id) if not booking else '',
+            'payment_token': str(payment.public_token),
         },
     }
+    if settings.MOYASAR_SAMSUNG_SERVICE_ID and 'samsungpay' in payment_config['methods']:
+        payment_config['samsung_pay'] = {
+            'service_id': settings.MOYASAR_SAMSUNG_SERVICE_ID,
+            'order_number': str(payment.public_token), 'country': 'SA',
+            'label': 'Code Care', 'environment': 'PRODUCTION',
+        }
+    if settings.MOYASAR_GOOGLE_MERCHANT_ID:
+        payment_config['google_pay'] = {
+            'merchant_id': settings.MOYASAR_GOOGLE_MERCHANT_ID, 'country': 'SA',
+            'label': 'Code Care', 'environment': 'PRODUCTION',
+            'auth_methods': ['PAN_ONLY', 'CRYPTOGRAM_3DS'],
+        }
     return render(request, 'api/moyasar_checkout.html', {
         'payment': payment,
         'booking': booking,
         'payment_config': payment_config,
         'reference_url': reference_url,
         'configured': moyasar_mode() != 'disabled',
+        'test_mode': moyasar_mode() == 'test',
         'customer_app_url': settings.CUSTOMER_APP_URL,
     })
 
@@ -1073,7 +1107,11 @@ def moyasar_callback_view(request, token):
     message = 'لم نتمكن من التحقق من العملية. يمكنك المحاولة مرة أخرى من صفحة طلباتي.'
     try:
         payment = verify_moyasar_transaction(token, payment_id)
-        if payment.status == 'paid' and payment.booking.status == 'accepted':
+        if payment.status == 'paid' and payment.customer_package_id and payment.customer_package.status == 'active':
+            result = 'success'
+            title = 'تم الدفع وتفعيل الباقة'
+            message = 'رصيد الغسلات جاهز للاستخدام من حسابك.'
+        elif payment.status == 'paid' and payment.booking_id and payment.booking.status in ['accepted', 'completed']:
             result = 'success'
             title = 'تم الدفع وتأكيد الحجز'
             message = 'تم استلام الدفعة بنجاح، وسيظهر الطلب الآن لدى فريق الغسيل.'
@@ -1254,3 +1292,25 @@ def manager_expense_detail(request, item_id):
     serializer.is_valid(raise_exception=True)
     serializer.save()
     return Response(serializer.data)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def moyasar_webhook_view(request):
+    secret = settings.MOYASAR_WEBHOOK_SECRET
+    supplied = request.data.get('secret_token', '')
+    if not secret or not isinstance(supplied, str) or not constant_time_compare(secret, supplied):
+        return Response({'detail': 'Unauthorized'}, status=403)
+    if request.data.get('type') not in ['payment_paid', 'payment_failed']:
+        return Response({'received': True})
+    data = request.data.get('data')
+    if not isinstance(data, dict):
+        return Response({'detail': 'Invalid payment'}, status=400)
+    metadata = data.get('metadata') or {}
+    try:
+        token = uuid.UUID(str(metadata.get('payment_token')))
+        verify_moyasar_transaction(token, data.get('id', ''))
+    except (ValueError, TypeError, PaymentTransaction.DoesNotExist, PaymentVerificationError):
+        # Non-success lets Moyasar retry delivery after transient verification failures.
+        return Response({'detail': 'Payment could not be verified'}, status=503)
+    return Response({'received': True})

@@ -36,10 +36,11 @@ from .views import (
     manager_package_purchases, manager_package_purchase_detail,
     manager_revoke_package,
     invoice_print_view, invoice_logo_view,
-    moyasar_checkout_view, moyasar_reference_view, moyasar_callback_view,
+    moyasar_checkout_view, moyasar_reference_view, moyasar_callback_view, moyasar_webhook_view,
 )
 
 urlpatterns = [
+    path('payments/webhook/', moyasar_webhook_view, name='moyasar-webhook'),
     path('hello/', hello_view, name='hello'),
     path('auth/register/', register_view, name='register'),
     path('auth/login/', login_view, name='login'),

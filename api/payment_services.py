@@ -2,6 +2,7 @@ import json
 import uuid
 from base64 import b64encode
 from decimal import Decimal
+from datetime import timedelta
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -9,7 +10,7 @@ from django.conf import settings
 from django.db import IntegrityError, transaction as db_transaction
 from django.utils import timezone
 
-from .models import Booking, Invoice, PaymentTransaction
+from .models import Booking, CustomerPackage, Invoice, PaymentTransaction
 from .booking_availability import lock_shared_team, shared_slot_is_booked
 
 
@@ -27,20 +28,45 @@ def moyasar_mode():
     return 'disabled'
 
 
+def _release_package_wash(booking):
+    if booking.package_wash_used and booking.customer_package_id:
+        package = CustomerPackage.objects.select_for_update().get(pk=booking.customer_package_id)
+        package.remaining_washes += 1
+        package.save(update_fields=['remaining_washes'])
+        booking.package_wash_used = False
+        booking.save(update_fields=['package_wash_used'])
+
+
 def expire_stale_payments():
-    expired_ids = list(
-        PaymentTransaction.objects.filter(
-            status='pending',
-            expires_at__lt=timezone.now(),
-        ).values_list('id', flat=True)
-    )
-    if not expired_ids:
-        return
-    PaymentTransaction.objects.filter(id__in=expired_ids).update(status='expired')
-    Booking.objects.filter(
-        payment__id__in=expired_ids,
-        status='pending',
-    ).update(status='canceled')
+    expired_ids = PaymentTransaction.objects.filter(
+        status='pending', expires_at__lt=timezone.now(),
+    ).values_list('id', flat=True)
+    for payment_id in list(expired_ids):
+        with db_transaction.atomic():
+            lock_shared_team()
+            payment = PaymentTransaction.objects.select_for_update().get(pk=payment_id)
+            if payment.status != 'pending' or payment.expires_at >= timezone.now():
+                continue
+            payment.status = 'expired'
+            payment.save(update_fields=['status', 'updated_at'])
+            if payment.booking_id:
+                booking = Booking.objects.select_for_update().get(pk=payment.booking_id)
+                if booking.status == 'pending':
+                    booking.status = 'canceled'
+                    booking.save(update_fields=['status'])
+                    _release_package_wash(booking)
+
+
+def _validate_purchase(payment, payload):
+    expected_amount = int(payment.amount * Decimal('100'))
+    if payload.get('amount') != expected_amount or payload.get('currency') != payment.currency:
+        raise PaymentVerificationError('قيمة أو عملة عملية الدفع غير مطابقة للطلب.')
+    metadata = payload.get('metadata') or {}
+    field = 'booking_id' if payment.booking_id else 'customer_package_id'
+    expected_id = payment.booking_id or payment.customer_package_id
+    if str(metadata.get(field, '')) != str(expected_id):
+        raise PaymentVerificationError('عملية الدفع لا تخص هذا الطلب.')
+
 
 
 def _safe_provider_response(payload):
@@ -91,41 +117,9 @@ def fetch_moyasar_payment(payment_id):
 
 
 def record_moyasar_reference(transaction_token, payment_id):
-    try:
-        clean_payment_id = str(uuid.UUID(str(payment_id)))
-    except (TypeError, ValueError, AttributeError) as exc:
-        raise PaymentVerificationError('رقم عملية الدفع غير صالح.') from exc
-
-    payload = fetch_moyasar_payment(clean_payment_id)
-    try:
-        provider_payload_id = str(uuid.UUID(str(payload.get('id'))))
-    except (TypeError, ValueError, AttributeError) as exc:
-        raise PaymentVerificationError('استجابة ميسر لا تحتوي رقم عملية صالحًا.') from exc
-
-    with db_transaction.atomic():
-        payment = PaymentTransaction.objects.select_for_update().select_related(
-            'booking'
-        ).get(public_token=transaction_token)
-        metadata = payload.get('metadata') or {}
-        expected_amount = int(payment.amount * Decimal('100'))
-        if provider_payload_id != clean_payment_id:
-            raise PaymentVerificationError('رقم العملية في استجابة ميسر غير مطابق.')
-        if payload.get('amount') != expected_amount or payload.get('currency') != payment.currency:
-            raise PaymentVerificationError('قيمة أو عملة عملية الدفع غير مطابقة للطلب.')
-        if str(metadata.get('booking_id', '')) != str(payment.booking_id):
-            raise PaymentVerificationError('عملية الدفع لا تخص هذا الطلب.')
-        if payment.provider_payment_id and payment.provider_payment_id != clean_payment_id:
-            raise PaymentVerificationError('رقم العملية لا يطابق محاولة الدفع الحالية.')
-
-        payment.provider_payment_id = clean_payment_id
-        payment.provider_response = _safe_provider_response(payload)
-        try:
-            payment.save(update_fields=[
-                'provider_payment_id', 'provider_response', 'updated_at',
-            ])
-        except IntegrityError as exc:
-            raise PaymentVerificationError('عملية الدفع مرتبطة بطلب آخر.') from exc
-        return payment
+    # Verify immediately as well as on redirect, so closing the result page
+    # after a successful wallet payment does not leave the purchase pending.
+    return verify_moyasar_transaction(transaction_token, payment_id)
 
 
 def verify_moyasar_transaction(transaction_token, payment_id):
@@ -145,22 +139,10 @@ def verify_moyasar_transaction(transaction_token, payment_id):
 
     with db_transaction.atomic():
         lock_shared_team()
-        payment = PaymentTransaction.objects.select_for_update().select_related(
-            'booking__service'
-        ).get(public_token=transaction_token)
-        booking = payment.booking
-
+        payment = PaymentTransaction.objects.select_for_update().get(public_token=transaction_token)
         if payment.provider_payment_id and payment.provider_payment_id != clean_payment_id:
             raise PaymentVerificationError('رقم العملية لا يطابق محاولة الدفع الحالية.')
-
-        expected_amount = int(payment.amount * Decimal('100'))
-        metadata = payload.get('metadata') or {}
-        if payload.get('amount') != expected_amount or payload.get('currency') != payment.currency:
-            raise PaymentVerificationError('قيمة أو عملة عملية الدفع غير مطابقة للطلب.')
-        if str(metadata.get('booking_id', '')) != str(booking.id):
-            raise PaymentVerificationError('عملية الدفع لا تخص هذا الطلب.')
-
-        # A later callback must not change a settled payment or its booking.
+        _validate_purchase(payment, payload)
         if payment.status == 'paid':
             return payment
 
@@ -171,25 +153,32 @@ def verify_moyasar_transaction(transaction_token, payment_id):
         if provider_status == 'paid':
             payment.status = 'paid'
             payment.paid_at = timezone.now()
-            if booking.status == 'canceled':
-                slot_taken = shared_slot_is_booked(
-                    booking.date, booking.time_slot, booking.service_group_id,
-                    exclude_booking_id=booking.pk,
-                )
-                if slot_taken:
-                    payment.save()
-                    return payment
-            booking.status = 'accepted'
-            booking.save(update_fields=['status'])
-            invoice, _ = Invoice.objects.get_or_create(booking=booking)
-            invoice.ensure_snapshot()
+            if payment.customer_package_id:
+                package = CustomerPackage.objects.select_for_update().get(pk=payment.customer_package_id)
+                if package.status == 'pending':
+                    terms = package.purchase_terms
+                    package.status = 'active'
+                    package.remaining_washes = terms['washes_count']
+                    package.activated_at = payment.paid_at
+                    package.expires_at = payment.paid_at + timedelta(days=terms['validity_days'])
+                    package.save(update_fields=['status', 'remaining_washes', 'activated_at', 'expires_at'])
+            else:
+                booking = Booking.objects.select_for_update().get(pk=payment.booking_id)
+                if booking.status == 'pending':
+                    booking.status = 'accepted'
+                    booking.save(update_fields=['status'])
+                    invoice, _ = Invoice.objects.get_or_create(booking=booking)
+                    invoice.ensure_snapshot()
         elif provider_status == 'failed':
-            payment.status = 'failed'
-            booking.status = 'canceled'
-            booking.save(update_fields=['status'])
-        else:
-            payment.status = 'pending'
-
+            if payment.status == 'pending':
+                payment.status = 'failed'
+                if payment.booking_id:
+                    booking = Booking.objects.select_for_update().get(pk=payment.booking_id)
+                    if booking.status == 'pending':
+                        booking.status = 'canceled'
+                        booking.save(update_fields=['status'])
+                        _release_package_wash(booking)
+        # Pending responses cannot revive a failed or expired attempt.
         try:
             payment.save()
         except IntegrityError as exc:
