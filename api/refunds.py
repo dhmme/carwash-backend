@@ -72,7 +72,8 @@ def cancel_purchase(*, actor, booking_id=None, package_id=None, manager=False):
             if booking_id:
                 if item.status == 'canceled':
                     return 'الحجز ملغي بالفعل.'
-                eligible_booking(item, manager)
+                if not (item.status == 'pending' and payment and payment.status == 'pending'):
+                    eligible_booking(item, manager)
             else:
                 if item.status != 'active' or timezone.now() - item.purchased_at > timedelta(days=7):
                     raise RefundError('الاسترجاع متاح للباقة النشطة خلال 7 أيام من الشراء. للحالات الاستثنائية تواصل مع الدعم.')

@@ -329,6 +329,7 @@ class BookingSerializer(serializers.ModelSerializer):
     invoice_url = serializers.SerializerMethodField()
     payment_status = serializers.SerializerMethodField()
     payment_checkout_url = serializers.SerializerMethodField()
+    payment_expires_at = serializers.SerializerMethodField()
 
     class Meta:
         model = Booking
@@ -339,7 +340,7 @@ class BookingSerializer(serializers.ModelSerializer):
             'status', 'payment_method', 'total_price', 'created_at',
             'add_ons', 'promo_code', 'discount_amount',
             'customer_package', 'package_wash_used',
-            'invoice_url', 'payment_status', 'payment_checkout_url',
+            'invoice_url', 'payment_status', 'payment_checkout_url', 'payment_expires_at',
         ]
         read_only_fields = ['status', 'total_price', 'discount_amount', 'package_wash_used', 'created_at']
 
@@ -525,7 +526,7 @@ class BookingSerializer(serializers.ModelSerializer):
                     PaymentTransaction.objects.create(
                         booking=booking,
                         amount=total_price,
-                        expires_at=timezone.now() + timedelta(minutes=15),
+                        expires_at=timezone.now() + timedelta(minutes=5),
                     )
                 else:
                     invoice = Invoice.objects.create(booking=booking)
@@ -554,6 +555,10 @@ class BookingSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         path = reverse('invoice-print', kwargs={'token': invoice.public_token})
         return request.build_absolute_uri(path) if request else path
+
+    def get_payment_expires_at(self, obj):
+        payment = getattr(obj, 'payment', None)
+        return payment.expires_at if payment and payment.status == 'pending' and obj.status == 'pending' else None
 
     def get_payment_status(self, obj):
         if obj.payment_method != 'online':

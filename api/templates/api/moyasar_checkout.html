@@ -33,6 +33,24 @@
         <div class="notice error">الدفع الإلكتروني غير متاح حاليًا.</div>
       {% else %}
         {% if test_mode %}<div class="notice">دفع تجريبي، ولن يتم خصم مبلغ حقيقي.</div>{% endif %}
+        {% if booking %}
+        <div class="notice" id="hold-notice" data-expires="{{ payment.expires_at|date:'c' }}">موعدك محجوز مؤقتًا لإكمال الدفع. المتبقي: <strong id="hold-countdown"></strong>. إذا لم تُكمل الدفع يتحرر الموعد تلقائيًا.</div>
+        <script>
+          const expires = Date.parse(document.getElementById('hold-notice').dataset.expires);
+          function updateHold() {
+            const seconds = Math.max(0, Math.ceil((expires - Date.now()) / 1000));
+            document.getElementById('hold-countdown').textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+            if (seconds === 0) {
+              clearInterval(holdTimer);
+              const form = document.querySelector('.mysr-form');
+              if (form) form.style.display = 'none';
+              window.location.reload();
+            }
+          }
+          const holdTimer = setInterval(updateHold, 1000);
+          updateHold();
+        </script>
+        {% endif %}
         <div class="mysr-form"></div>
         {{ payment_config|json_script:"moyasar-payment-config" }}
         {{ reference_url|json_script:"moyasar-reference-url" }}
