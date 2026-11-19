@@ -105,3 +105,39 @@ class RefundTests(TestCase):
         self.assertEqual(response.status_code,200)
         self.assertNotContains(response, 'class="mysr-form"')
         self.assertContains(response, 'تم استرجاع مبلغ')
+
+    def test_refund_request_headers_and_form_amount(self):
+        from urllib.parse import parse_qs
+        from .refunds import post_refund
+        from unittest.mock import MagicMock
+        response=MagicMock()
+        response.__enter__.return_value.read.return_value=b'{"status":"refunded"}'
+        with patch('api.refunds.urlopen',return_value=response) as call:
+            post_refund(self.payment)
+        request=call.call_args.args[0]
+        self.assertEqual(request.get_header('User-agent'),'Code-Care/1.0')
+        self.assertEqual(request.get_header('Content-type'),'application/x-www-form-urlencoded')
+        self.assertEqual(parse_qs(request.data.decode()),{'amount':['3400']})
+
+    def test_provider_rejection_has_safe_code_and_can_retry(self):
+        from urllib.error import HTTPError
+        from io import BytesIO
+        error=HTTPError('https://api.moyasar.com',403,'denied',{},BytesIO(b'{"type":"api_error","message":"private data"}'))
+        with patch('api.refunds.fetch_moyasar_payment',return_value=self.payload()),patch('api.refunds.post_refund',side_effect=error):
+            with self.assertRaisesRegex(RefundError,'R-refund-403') as caught:
+                cancel_purchase(actor=self.user,booking_id=self.booking.pk)
+            self.assertNotIn('private data',str(caught.exception))
+        self.assertEqual(PaymentRefund.objects.get().state,'rejected')
+        with patch('api.refunds.fetch_moyasar_payment',return_value=self.payload()),patch('api.refunds.post_refund',return_value=self.payload(refunded=3400)) as post:
+            cancel_purchase(actor=self.user,booking_id=self.booking.pk)
+            self.assertEqual(post.call_count,1)
+
+    def test_failed_get_after_uncertain_post_does_not_allow_resending(self):
+        with patch('api.refunds.fetch_moyasar_payment',return_value=self.payload()),patch('api.refunds.post_refund',side_effect=TimeoutError):
+            with self.assertRaises(RefundError): cancel_purchase(actor=self.user,booking_id=self.booking.pk)
+        with patch('api.refunds.fetch_moyasar_payment',side_effect=TimeoutError):
+            with self.assertRaises(RefundError): cancel_purchase(actor=self.user,booking_id=self.booking.pk)
+        self.assertEqual(PaymentRefund.objects.get().state,'unknown')
+        with patch('api.refunds.fetch_moyasar_payment',return_value=self.payload()),patch('api.refunds.post_refund') as post:
+            with self.assertRaises(RefundError): cancel_purchase(actor=self.user,booking_id=self.booking.pk)
+            post.assert_not_called()
