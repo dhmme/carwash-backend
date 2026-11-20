@@ -457,3 +457,19 @@ class PaymentRefund(models.Model):
     original_status = models.CharField(max_length=20)
     created_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True)
+
+
+class WorkerMonthlyBonus(models.Model):
+    worker = models.ForeignKey(User, on_delete=models.PROTECT, related_name='monthly_bonuses')
+    month = models.DateField()
+    amount = models.DecimalField(max_digits=9, decimal_places=2, default=0)
+    updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='+')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['worker', 'month'], name='unique_worker_month_bonus'),
+            models.CheckConstraint(condition=models.Q(amount__gte=0), name='worker_bonus_nonnegative'),
+            models.CheckConstraint(condition=models.Q(month__day=1), name='worker_bonus_month_start'),
+        ]
+        ordering = ['-month', 'worker_id']

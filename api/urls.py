@@ -39,7 +39,12 @@ from .views import (
     moyasar_checkout_view, moyasar_reference_view, moyasar_callback_view, moyasar_webhook_view,
 )
 
+from .worker_bonuses import worker_bonus, manager_worker_bonuses, manager_worker_bonus
+
 urlpatterns = [
+    path('worker/bonus/', worker_bonus),
+    path('manager/worker-bonuses/', manager_worker_bonuses),
+    path('manager/workers/<int:item_id>/bonus/', manager_worker_bonus),
     path('customer-packages/<int:item_id>/refund/', refund_customer_package),
     path('payments/webhook/', moyasar_webhook_view, name='moyasar-webhook'),
     path('hello/', hello_view, name='hello'),
